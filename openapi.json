@@ -736,8 +736,7 @@
               "running",
               "completed",
               "failed",
-              "rejected",
-              "imported"
+              "rejected"
             ],
             "title": "Status",
             "type": "string"
@@ -1894,8 +1893,7 @@
                     "running",
                     "completed",
                     "failed",
-                    "rejected",
-                    "imported"
+                    "rejected"
                   ],
                   "type": "string"
                 },

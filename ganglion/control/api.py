@@ -27,7 +27,7 @@ from .service import ControlPlane
 
 API_PREFIX = "/v1"
 
-JobStatus = Literal["queued", "running", "completed", "failed", "rejected", "imported"]
+JobStatus = Literal["queued", "running", "completed", "failed", "rejected"]
 AttemptStatus = Literal["active", "completed", "failed", "released", "expired"]
 
 

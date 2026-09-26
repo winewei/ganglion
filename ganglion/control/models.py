@@ -13,9 +13,8 @@ JOB_RUNNING = "running"      # owned by exactly one current attempt (current_att
 JOB_COMPLETED = "completed"  # terminal: an attempt reported a result
 JOB_FAILED = "failed"        # terminal until `retry`: attempts exhausted / non-retryable failure / no worker can serve it
 JOB_REJECTED = "rejected"    # terminal forever: failed admission (recursion depth, missing parent, invalid name)
-JOB_IMPORTED = "imported"    # terminal: placeholder for a Ganglion 1.x request, keeps the inbox from relaunching it
-JOB_STATUSES = (JOB_QUEUED, JOB_RUNNING, JOB_COMPLETED, JOB_FAILED, JOB_REJECTED, JOB_IMPORTED)
-JOB_TERMINAL = (JOB_COMPLETED, JOB_FAILED, JOB_REJECTED, JOB_IMPORTED)
+JOB_STATUSES = (JOB_QUEUED, JOB_RUNNING, JOB_COMPLETED, JOB_FAILED, JOB_REJECTED)
+JOB_TERMINAL = (JOB_COMPLETED, JOB_FAILED, JOB_REJECTED)
 
 # --- Attempt: one worker's execution of a job. Never overwritten, never reused. ----------
 ATT_ACTIVE = "active"

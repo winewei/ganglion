@@ -41,7 +41,6 @@ from .models import (
     DEFAULT_LAUNCHER,
     JOB_COMPLETED,
     JOB_FAILED,
-    JOB_IMPORTED,
     JOB_QUEUED,
     JOB_REJECTED,
     JOB_RUNNING,
@@ -275,25 +274,6 @@ class ControlPlane:
                 raise Conflict("job changed concurrently; try again")
             t.add_event(t0, "job.retried", job["id"])
             return self._job_view(t, t.get("jobs", job["id"]), attempts=True)
-
-    def import_legacy(self, key: str, name: str, repo_name: str, legacy: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-        """Record a Ganglion 1.x request as an ``imported`` (terminal) job so it is not relaunched."""
-        t0 = self.clock()
-        with self.store.tx() as t:
-            existing = t.job_by_key(key)
-            if existing:
-                return self._job_view(t, existing), False
-            row = {
-                "id": new_id("job"), "key": key, "name": name, "status": JOB_IMPORTED, "target": legacy.get("target") or "existing",
-                "repository": {"name": repo_name or "unknown"}, "goal": "", "launcher": DEFAULT_LAUNCHER,
-                "requirements": {}, "source": legacy.get("source") or "human", "parent_job_id": None,
-                "depth": int(legacy.get("depth") or 0), "max_attempts": 0, "timeout_seconds": None,
-                "result": {"legacy": legacy}, "error": None, "created_at": t0, "updated_at": t0, "finished_at": t0,
-            }
-            created = t.insert("jobs", row, on_conflict_ignore="key")
-            if created:
-                t.add_event(t0, "job.imported", row["id"], data={"key": key, "legacy_status": legacy.get("status")})
-            return self._job_view(t, t.job_by_key(key)), created
 
     # ------------------------------------------------------------------ workers
     def register_worker(self, worker_id: str, info: dict[str, Any]) -> dict[str, Any]:
