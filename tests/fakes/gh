@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# 假的 gh（测试用）：记录参数；repo create 成功；repo clone 用 git init 模拟空仓库。
+printf '%s\n' "$*" >> "${FAKE_CTL:?}/gh.log"
+case "$1 $2" in
+  "repo create") exit 0 ;;
+  "repo view") exit 1 ;;
+  "repo clone") mkdir -p "$4" && git init -q -b main "$4" && exit 0 ;;
+esac
+exit 1

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# 假的 claude CLI（测试用）。行为由 $FAKE_CTL/<GANGLION_ID>.mode 决定：
+#   idle     什么都不做，常驻（默认）
+#   trust    无论 ~/.claude.json 如何，都先弹 trust 提示并等待回车
+#   deliver  写 DELIVERY.md，然后像 Claude Code 一样调用两次 Stop hook
+#   stop     不写 DELIVERY.md，调用一次 Stop hook（模拟中途停下）
+# 与真 claude 一样：若 $FAKE_CLAUDE_JSON 里当前目录未 trust，也会弹 trust 提示。
+set -u
+ctl="${FAKE_CTL:?}"
+id="${GANGLION_ID:-none}"
+printf '%s\t%s\t%s\n' "$(date +%s)" "$PWD" "$*" >> "$ctl/$id.invocations"
+env | grep '^GANGLION_' | sort > "$ctl/$id.env"
+mode=$(cat "$ctl/$id.mode" 2>/dev/null || echo idle)
+
+trusted=no
+if [ -n "${FAKE_CLAUDE_JSON:-}" ] && python3 - "$FAKE_CLAUDE_JSON" "$PWD" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("projects", {}).get(sys.argv[2], {}).get("hasTrustDialogAccepted") is True else 1)
+PY
+then trusted=yes; fi
+
+if [ "$mode" = trust ] || [ "$trusted" = no ]; then
+  echo "Do you trust the files in this folder?"
+  echo "$PWD"
+  echo " > 1. Yes, proceed"
+  echo "   2. No, exit"
+  read -r _ans
+  : > "$ctl/$id.trust_accepted"
+  clear
+fi
+
+echo "fake claude running: $*"
+
+run_hook() {
+  printf '{"hook_event_name":"Stop","session_id":"fake","cwd":"%s","stop_hook_active":false}' "$PWD" \
+    | "${FAKE_STOP_HOOK:?}"
+  echo "hook rc=$?" >> "$ctl/$id.hook"
+}
+
+case "$mode" in
+  deliver)
+    for i in $(seq 1 30); do echo "delivery line $i"; done > DELIVERY.md
+    run_hook
+    run_hook
+    ;;
+  stop)
+    run_hook
+    ;;
+esac
+: > "$ctl/$id.ready"
+exec sleep 3600

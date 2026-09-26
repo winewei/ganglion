@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ganglion 的 launchd 用户代理（LaunchAgent）。
+  安装前把下面四个占位符替换成绝对路径（README 有一条 sed 命令）：
+    __GANGLION_DIR__  本仓库 clone 的位置，例如 /Users/me/ganglion
+    __PYTHON__        Python 3.11+ 解释器，例如 /opt/homebrew/bin/python3.12
+    __HOME__          你的家目录，例如 /Users/me
+    __CONFIG__        配置文件，例如 /Users/me/.config/ganglion/config.toml
+  然后：
+    cp deploy/com.ganglion.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ganglion.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ganglion</string>
+
+  <!-- caffeinate -i：Ganglion 活着期间阻止系统空闲睡眠（合盖睡眠不受影响） -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>__PYTHON__</string>
+    <string>__GANGLION_DIR__/ganglion.py</string>
+    <string>--config</string>
+    <string>__CONFIG__</string>
+    <string>run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__GANGLION_DIR__</string>
+
+  <!-- launchd 的默认 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，找不到 Homebrew 的
+       tmux/gh 和 ~/.local/bin 的 claude。tmux server 若由 Ganglion 首次拉起，
+       会继承这里的环境，claude 会话里的 PATH 也来自这里。 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- 进程退出就重启 -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <!-- Ganglion 退出/重启时，launchd 默认会清理它的进程组。tmux server 虽然会
+       setsid 脱离，但保险起见显式声明：绝不连带杀掉正在干活的 claude 会话。 -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/ganglion.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/ganglion.log</string>
+</dict>
+</plist>
