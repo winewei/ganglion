@@ -1,0 +1,20 @@
+# systemd *user* unit for a Linux worker.
+#   cp deploy/ganglion-worker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now ganglion-worker
+#   loginctl enable-linger $USER      # keep it running without a login session
+[Unit]
+Description=Ganglion worker
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/ganglion/bin/ganglion --config %h/.config/ganglion/config.toml worker start
+Restart=always
+RestartSec=10
+# Only stop the worker process itself. The default (control-group) would also kill the
+# tmux server and every running agent session whenever the worker restarts.
+KillMode=process
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+
+[Install]
+WantedBy=default.target

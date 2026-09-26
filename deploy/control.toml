@@ -1,0 +1,16 @@
+# Control-plane config used by deploy/docker-compose.yml.
+[worker]
+control_plane = "http://127.0.0.1:8700"   # only used by CLI commands run inside the container
+
+[control]
+database = "postgresql://ganglion@db:5432/ganglion"   # password comes from PGPASSWORD
+listen = "0.0.0.0"
+port = 8700
+token_file = "/run/secrets/api_token"
+lease_ttl = 300
+heartbeat_interval = 30
+max_depth = 2
+max_attempts = 3
+
+[notify]
+backend = "null"   # or ntfy: job lifecycle notifications are sent from here

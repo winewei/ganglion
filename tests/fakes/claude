@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# 假的 claude CLI（测试用）。行为由 $FAKE_CTL/<GANGLION_ID>.mode 决定：
-#   idle     什么都不做，常驻（默认）
-#   trust    无论 ~/.claude.json 如何，都先弹 trust 提示并等待回车
-#   deliver  写 DELIVERY.md，然后像 Claude Code 一样调用两次 Stop hook
-#   stop     不写 DELIVERY.md，调用一次 Stop hook（模拟中途停下）
-# 与真 claude 一样：若 $FAKE_CLAUDE_JSON 里当前目录未 trust，也会弹 trust 提示。
+# Fake claude CLI (tests only). Behaviour comes from $FAKE_CTL/<GANGLION_ID>.mode:
+#   idle      do nothing, stay alive (default)
+#   trust     always show the trust prompt first and wait for Enter
+#   deliver   write DELIVERY.md, then call the Stop hook twice like Claude Code does
+#   stop      no DELIVERY.md, call the Stop hook once (agent paused mid-way)
+#   result    write a structured Spine result to $GANGLION_RESULT_FILE (Spine 2.x contract)
+#   failed    write a structured result with status "failed"
+#   exit      exit immediately without any result (launcher died)
+#   ondemand  stay alive; write DELIVERY.md when $FAKE_CTL/<id>.<attempt>.go appears
+# Like the real claude: if $FAKE_CLAUDE_JSON does not trust $PWD, show the trust prompt.
 set -u
 ctl="${FAKE_CTL:?}"
 id="${GANGLION_ID:-none}"
+att="${GANGLION_ATTEMPT_ID:-none}"
 printf '%s\t%s\t%s\n' "$(date +%s)" "$PWD" "$*" >> "$ctl/$id.invocations"
 env | grep '^GANGLION_' | sort > "$ctl/$id.env"
 mode=$(cat "$ctl/$id.mode" 2>/dev/null || echo idle)
@@ -41,15 +46,28 @@ run_hook() {
   echo "hook rc=$?" >> "$ctl/$id.hook"
 }
 
+deliver() {
+  for i in $(seq 1 30); do echo "delivery line $i"; done > DELIVERY.md
+  git add DELIVERY.md >/dev/null 2>&1 && git commit -q -m "deliver $id" >/dev/null 2>&1
+  run_hook
+  run_hook
+}
+
 case "$mode" in
-  deliver)
-    for i in $(seq 1 30); do echo "delivery line $i"; done > DELIVERY.md
-    run_hook
-    run_hook
-    ;;
-  stop)
-    run_hook
-    ;;
+  deliver) deliver ;;
+  stop) run_hook ;;
+  result|failed)
+    status=completed; [ "$mode" = failed ] && status=failed
+    sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+    printf '{"schema":"ganglion.engineering-result/v1","status":"%s","run_id":"run-%s","final_sha":"%s","summary":"structured %s","result_uri":"file:///results/%s"}' \
+      "$status" "$id" "$sha" "$id" "$id" > "${GANGLION_RESULT_FILE:?}.tmp"
+    mv "${GANGLION_RESULT_FILE}.tmp" "$GANGLION_RESULT_FILE"
+    run_hook ;;
+  exit) : > "$ctl/$id.ready"; exit 0 ;;
+  ondemand)
+    : > "$ctl/$id.ready"
+    while [ ! -e "$ctl/$id.$att.go" ]; do sleep 0.2; done
+    deliver ;;
 esac
 : > "$ctl/$id.ready"
 exec sleep 3600

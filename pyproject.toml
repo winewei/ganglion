@@ -1,0 +1,23 @@
+[project]
+name = "ganglion"
+version = "2.0.0"
+description = "Small control plane + worker runtime that launches Agent Spine runs on distributed workers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# The worker and single-machine mode need only the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+# The control-plane HTTP server (and PostgreSQL driver).
+server = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2.6", "psycopg[binary]>=3.1"]
+
+[project.scripts]
+ganglion = "ganglion.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ganglion*"]

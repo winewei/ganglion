@@ -1,0 +1,43 @@
+# Control plane + PostgreSQL. From the repo root:
+#   mkdir -p deploy/secrets && openssl rand -hex 32 > deploy/secrets/api_token
+#   echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" > deploy/.env
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+# deploy/secrets/ and deploy/.env are git-ignored. Workers use the same api_token.
+# The API is published on 127.0.0.1 only: put a TLS-terminating proxy (or a VPN /
+# SSH tunnel) in front of it before pointing remote workers at it.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ganglion
+      POSTGRES_DB: ganglion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ganglion -d ganglion"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  control:
+    build: ..
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}   # libpq reads it; the DSN below carries no secret
+    volumes:
+      - ./control.toml:/etc/ganglion/config.toml:ro
+    secrets:
+      - api_token
+    ports:
+      - "127.0.0.1:8700:8700"
+    restart: unless-stopped
+
+secrets:
+  api_token:
+    file: ./secrets/api_token
+
+volumes:
+  pgdata:
