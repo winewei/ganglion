@@ -7,13 +7,14 @@ two machines. Real tmux + fake claude; no LLM calls.
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
 
 from support import Sandbox, sh, wait_for
 
 from ganglion.control.client import LocalClient
-from ganglion.control.models import Unavailable
+from ganglion.control.models import InvalidRequest, Unavailable
 from ganglion.control.service import ControlPlane, Settings
 from ganglion.control.store import SqliteStore
 from ganglion.notify import FileNotifier
@@ -54,7 +55,11 @@ class Flaky(LocalClient):
     def claim(self, *a, **kw):
         return self._wrap("claim", super().claim, *a, **kw)
 
+    reject_complete = False
+
     def complete(self, *a, **kw):
+        if self.reject_complete:  # what the HTTP schema does to a payload it will never accept
+            raise InvalidRequest("result.summary: String should have at most 20000 characters")
         return self._wrap("complete", super().complete, *a, **kw)
 
     def heartbeat(self, *a, **kw):
@@ -303,6 +308,19 @@ class TestDistributedWorker(WorkerEnv):
         self.assertEqual(self.full(j["id"])["status"], "completed")
         self.assertEqual(self.service.metrics()["result_report_retries"], 1)
 
+    def test_rejected_report_becomes_a_failure_not_a_loop(self):
+        self.set_mode("j1", "deliver")
+        a = self.worker("A")
+        j = self.job()
+        a.tick()
+        wait_for(lambda: (self.ctl / "j1.ready").exists())
+        a.client.reject_complete = True
+        a.tick()
+        self.assertEqual(self.rec(a, "j1")["status"], "done")
+        full = self.full(j["id"])
+        self.assertEqual(full["status"], "failed")
+        self.assertIn("report_rejected", full["error"])
+
     def test_control_plane_unreachable_does_not_fail_work(self):
         self.set_mode("j1", "ondemand")
         a = self.worker("A")
@@ -412,6 +430,22 @@ class TestIsolation(WorkerEnv):
         a.tick()
         self.assertEqual(self.full(j1["id"])["status"], "completed")
         self.assertEqual(self.full(j2["id"])["status"], "running")
+
+    def test_stale_session_keeps_shared_checkout_busy(self):
+        self.set_mode("s1", "ondemand")
+        a = self.worker("A", isolation="shared")
+        j = self.job("s1", repository={"name": "app"})
+        a.tick()
+        old = self.rec(a, "s1")
+        self.clock.advance(self.lease_ttl + 1)
+        a.tick()  # heartbeat rejected -> stale; the job is requeued
+        self.assertEqual(self.rec(a, "s1")["status"], "stale")
+        self.assertEqual(self.full(j["id"])["status"], "queued")  # not re-launched next to the live stale agent
+        self.assertEqual(len(self.invocations("s1")), 1)
+        subprocess.run(["tmux", "-L", a.cfg.claude.tmux_socket, "kill-session", "-t", f"={old['handle']}"], check=True)
+        a.tick()
+        self.assertEqual(self.full(j["id"])["epoch"], 2)
+        self.assertEqual(self.rec(a, "s1")["status"], "running")
 
     def test_worktrees_run_concurrently_on_one_repo(self):
         a = self.worker("A")

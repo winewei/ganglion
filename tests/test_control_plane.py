@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -423,6 +424,32 @@ class Base:
         cp2.heartbeat(a["id"], "A", 1)  # the owner is still authoritative
         self.assertIsNone(cp2.claim("B"))
 
+    def test_restart_grace_is_bounded_by_real_downtime(self):
+        self.job()
+        _, a = self.claim("A")                 # lease until T+60
+        self.clock.advance(10)
+        self.cp.sweep()                        # server last seen alive at T+10
+        self.clock.advance(10)                 # down for 10s
+        self.new_cp().start()                  # lease pushed back by exactly 10s -> T+70
+        self.new_cp().start()                  # an immediate crash-loop restart adds ~nothing
+        self.clock.advance(49)                 # T+69: still owned
+        self.assertIsNone(self.cp.claim("B"))
+        self.clock.advance(2)                  # T+71: expired, claimable
+        self.assertEqual(self.cp.claim("B")["attempt"]["epoch"], 2)
+
+    def test_restart_grace_does_not_revive_lapsed_leases(self):
+        self.job()
+        _, a = self.claim("A")
+        self.clock.advance(61)
+        self.cp.worker_heartbeat("A")
+        self.new_cp()  # noqa: B018
+        # the server was alive past the lease end (sweep refreshes last_alive after expiring)
+        self.cp.sweep()
+        self.clock.advance(100)
+        self.new_cp().start()
+        with self.assertRaises(StaleAttempt):
+            self.cp.heartbeat(a["id"], "A", 1)
+
     def test_register_returns_owned_attempts(self):
         self.job()
         _, a = self.claim("A")
@@ -478,6 +505,38 @@ class PostgresControlPlaneTest(Base, unittest.TestCase):
                 c.execute(f"CREATE SCHEMA {self.schema}")
         sep = "&" if "?" in PG_DSN else "?"
         return PostgresStore(f"{PG_DSN}{sep}options=-csearch_path%3D{self.schema}")
+
+    def test_overlapping_duplicate_complete_replays(self):
+        """A retry that overlaps the first call (both wait on the row lock) must get a replay,
+        not a spurious stale_attempt."""
+        import psycopg
+
+        job = self.job()
+        _, a = self.claim("A")
+        sep = "&" if "?" in PG_DSN else "?"
+        locker = psycopg.connect(f"{PG_DSN}{sep}options=-csearch_path%3D{self.schema}")
+        locker.execute("SELECT 1 FROM jobs WHERE id = %s FOR UPDATE", (job["id"],))
+        out = {}
+
+        def go(tag):
+            cp = self.new_cp()
+            try:
+                out[tag] = cp.complete(a["id"], "A", 1, "rpt-1", {"summary": "done"})["replay"]
+            except Exception as e:  # pragma: no cover
+                out[tag] = e
+            finally:
+                cp.store.close()
+
+        ts = [threading.Thread(target=go, args=(t,)) for t in ("first", "retry")]
+        for t in ts:
+            t.start()
+            time.sleep(0.3)
+        locker.rollback()
+        locker.close()
+        for t in ts:
+            t.join(10)
+        self.assertEqual(sorted(out.values()), [False, True], out)
+        self.assertEqual(self.cp.get_job(job["id"])["status"], "completed")
 
     def tearDown(self):
         super().tearDown()

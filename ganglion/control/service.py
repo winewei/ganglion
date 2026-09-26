@@ -58,6 +58,7 @@ from .store import Increment, IntegrityError, Store, Tx
 
 WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+RESULT_FIELD_MAX = {"status": 64, "final_sha": 64, "source": 64, "spine_version": 64, "result_uri": 2000, "branch": 300}
 
 
 @dataclass
@@ -95,16 +96,29 @@ class ControlPlane:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
+        """Migrate, then compensate running leases for the control plane's own downtime.
+
+        Workers cannot heartbeat while the server is down, so leases that were still valid
+        when the server was last known alive (``meta.last_alive``, refreshed by every sweep)
+        are pushed back by exactly the downtime. Leases that had already lapsed stay lapsed,
+        and a crash-looping server only ever adds the time it was really unavailable.
+        """
         self.store.migrate()
         extended = 0
         t0 = self.clock()
         with self.store.tx() as t:
-            if self.settings.restart_grace:
+            last_alive = t.get_meta_float("last_alive")
+            if self.settings.restart_grace and last_alive is not None and t0 > last_alive:
+                downtime = t0 - last_alive
                 for job in t.all("SELECT * FROM jobs WHERE status = 'running'"):
-                    new_lease = max(job["lease_until"] or 0, t0 + self.settings.lease_ttl)
+                    lease = job["lease_until"] or 0
+                    if lease < last_alive:
+                        continue  # already expired while we were up; the next claim/sweep retires it
+                    new_lease = lease + downtime
                     if t.cas("jobs", job["id"], {"status": JOB_RUNNING, "epoch": job["epoch"]}, {"lease_until": new_lease}):
                         t.cas("attempts", job["current_attempt_id"], {"status": ATT_ACTIVE}, {"lease_until": new_lease})
                         extended += 1
+            t.set_meta("last_alive", t0)
             t.add_event(t0, "control.started", data={"leases_extended": extended})
         log(f"control plane started ({extended} running lease(s) extended by restart grace)")
 
@@ -481,6 +495,7 @@ class ControlPlane:
                 if t.cas("workers", w["id"], {"status": WORKER_ONLINE, "last_seen": w["last_seen"]}, {"status": WORKER_OFFLINE}):
                     t.add_event(t0, "worker.offline", worker_id=w["id"], data={"last_seen": w["last_seen"]})
                     offline += 1
+            t.set_meta("last_alive", t0)
         self._notify(notes)
         return {"expired": expired, "offline": offline}
 
@@ -508,6 +523,17 @@ class ControlPlane:
                         data={"op": op, "reason": err.extra.get("reason")})
             log_metric("stale_attempt_rejections", op=op, reason=err.extra.get("reason"), worker=worker_id)
         return att, job, err
+
+    def _after_miss(self, t: Tx, att: dict[str, Any], target: str):
+        """Our compare-and-set matched nothing. Before calling the caller stale, re-read the
+        attempt: an overlapping duplicate of this very request (a client retry while the first
+        call was still waiting on the row lock) may just have committed the same outcome."""
+        cur = t.get("attempts", att["id"])
+        if cur["status"] == target:
+            return self._attempt_outcome(t, cur, replay=True), None
+        if cur["status"] in (ATT_COMPLETED, ATT_FAILED, ATT_RELEASED):
+            return None, Conflict(f"attempt already {cur['status']}")
+        return None, StaleAttempt("job is owned by another attempt", reason="not_current")
 
     def _owner_expect(self, att: dict[str, Any], t0: float) -> dict[str, Any]:
         return {"status": JOB_RUNNING, "current_attempt_id": att["id"], "epoch": att["epoch"], "lease_until__gte": t0}
@@ -564,7 +590,7 @@ class ControlPlane:
                     out = self._attempt_outcome(t, t.get("attempts", att["id"]), replay=False)
                     log_metric("attempt_duration", duration, job=job["id"], outcome="completed")
                 else:
-                    err = StaleAttempt("job is owned by another attempt", reason="not_current")
+                    out, err = self._after_miss(t, att, ATT_COMPLETED)
         self._notify(notes)
         if err is not None:
             raise err
@@ -604,7 +630,7 @@ class ControlPlane:
                         notes.append((f"❌ Ganglion 出错：{job['name']}", text[:2000], ["x"]))
                     out = self._attempt_outcome(t, t.get("attempts", att["id"]), replay=False)
                 else:
-                    err = StaleAttempt("job is owned by another attempt", reason="not_current")
+                    out, err = self._after_miss(t, att, ATT_FAILED)
         self._notify(notes)
         if err is not None:
             raise err
@@ -630,7 +656,7 @@ class ControlPlane:
                     t.add_event(t0, "job.requeued", job["id"], data={"reason": "released"})
                     out = self._attempt_outcome(t, t.get("attempts", att["id"]), replay=False)
                 else:
-                    err = StaleAttempt("job is owned by another attempt", reason="not_current")
+                    out, err = self._after_miss(t, att, ATT_RELEASED)
         self._notify(notes)
         if err is not None:
             raise err
@@ -682,6 +708,9 @@ class ControlPlane:
         """Keep the stored result small: pointers and a bounded summary, never logs."""
         allowed = ("status", "run_id", "final_sha", "summary", "result_uri", "branch", "source", "spine_version")
         out = {k: result.get(k) for k in allowed if result.get(k) is not None}
+        for k, v in list(out.items()):
+            if k != "summary" and isinstance(v, str) and len(v) > RESULT_FIELD_MAX.get(k, 200):
+                out[k] = v[: RESULT_FIELD_MAX.get(k, 200)]
         if isinstance(out.get("summary"), str) and len(out["summary"]) > self.settings.max_summary_chars:
             out["summary"] = out["summary"][: self.settings.max_summary_chars] + "\n…(truncated)"
         return out

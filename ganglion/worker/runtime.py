@@ -32,7 +32,7 @@ from .. import __version__
 from ..common import CmdError, log, log_metric, new_id, now
 from ..config import Config
 from ..control.client import Client
-from ..control.models import Conflict, NotFound, StaleAttempt, Unavailable
+from ..control.models import Conflict, ControlError, InvalidRequest, NotFound, StaleAttempt, Unavailable
 from ..launchers.base import Launcher, LaunchSpec
 from ..launchers.claude import SESSION_PREFIX, ClaudeCodeLauncher
 from ..notify import Notifier, make_notifier, safe_notify
@@ -225,9 +225,20 @@ class Worker:
         return max(0, self.cfg.max_concurrent - active)
 
     def busy_shared_repos(self) -> list[str]:
-        return sorted({r["repo_name"] for r in self._open_records().values()
-                       if r["status"] in LOCAL_ACTIVE and r.get("mode") in (repo_mod.MODE_SHARED, None) and r.get("repo_name")
-                       and not (r.get("job") or {}).get("repository", {}).get("url")})
+        """Repo names whose shared checkout must not receive another attempt right now: an
+        attempt of ours is working in it, or a stale one's process may still be (its
+        DELIVERY.md would otherwise be mistaken for the next attempt's result)."""
+        busy = set()
+        for r in self.state.snapshot()["attempts"].values():
+            if not r.get("repo_name") or (r.get("job") or {}).get("repository", {}).get("url"):
+                continue
+            if r.get("mode") not in (repo_mod.MODE_SHARED, None):
+                continue
+            if r["status"] in LOCAL_ACTIVE:
+                busy.add(r["repo_name"])
+            elif r["status"] == L_STALE and r.get("handle") and self.launcher.is_alive(r["handle"]) is not False:
+                busy.add(r["repo_name"])
+        return sorted(busy)
 
     def claim_until_full(self) -> int:
         claimed = 0
@@ -280,6 +291,13 @@ class Worker:
         if rec is None:
             return
         if rec["status"] == L_REPORTING:
+            # Keep the lease while the report is pending (a slow report must not cost the work),
+            # but let the report itself decide ownership: if our outcome was already committed
+            # and only the reply was lost, the heartbeat is refused while the report replays.
+            try:
+                self.client.heartbeat(rec["attempt_id"], rec["epoch"])
+            except (StaleAttempt, NotFound, Unavailable):
+                pass
             self._flush(rec)
         elif rec["status"] in (L_PREPARING, L_LAUNCHING):
             self._launch(rec)
@@ -453,6 +471,23 @@ class Worker:
         except (Conflict, NotFound) as e:
             self.state.update_attempt(att_id, status=L_DONE, outcome=f"{kind}: {e.code}: {e.detail}")
             local_event(self.cfg.state_dir, "report_conflict", e.detail, job=rec.get("name"), attempt=att_id)
+            return
+        except InvalidRequest as e:
+            # The control plane will never accept this payload; resending it forever would
+            # strand the attempt. Report the rejection itself as the outcome instead.
+            local_event(self.cfg.state_dir, "report_rejected", e.detail, job=rec.get("name"), attempt=att_id)
+            if kind == "fail" and p.get("reason") == "report_rejected":
+                self.state.update_attempt(att_id, status=L_DONE, outcome=f"report rejected: {e.detail}")
+                return
+            with self.state.locked() as st:
+                st["attempts"][att_id]["report"] = {
+                    "kind": "fail", "request_id": new_id("rpt"), "attempts": 0,
+                    "payload": {"reason": "report_rejected", "message": f"{kind} rejected: {e.detail}"[:3000], "retryable": False},
+                }
+            self._flush(self.state.snapshot()["attempts"][att_id])
+            return
+        except ControlError as e:  # unexpected (auth, protocol): keep the report and retry later
+            log(f"{att_id}: {kind} report failed ({e.code}: {e.detail}); will retry")
             return
         self.state.update_attempt(att_id, status=L_DONE, outcome=kind, reported_at=now())
         local_event(self.cfg.state_dir, f"reported_{kind}", p.get("reason", "") if kind != "complete" else "",

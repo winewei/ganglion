@@ -121,10 +121,10 @@ preparing ─► launching ─► running ─► reporting ─► done
    - SQLite：写事务以 `BEGIN IMMEDIATE` 开始，写者串行。
 2. **Lease。** `jobs.lease_until` 是执行权期限，心跳续期（`lease_ttl` 默认 300s，建议心跳 30s）。过期的 lease 立即失效：owner 不能再心跳 / 上报，Job 可被重新 claim。两件事在同一个时间点切换，不存在"既可 claim 又仍权威"的窗口。
 3. **Fencing。** 每个 attempt 变更（heartbeat / complete / fail / release）都带 `(attempt_id, worker_id, epoch)`，并且是一次条件更新：`WHERE status='running' AND current_attempt_id=:att AND epoch=:epoch AND lease_until >= now`。不满足就返回 `409 stale_attempt`（附 `reason`：`worker_mismatch`、`epoch_mismatch`、`not_current`、`lease_expired`、`expired`…），并记一条 `attempt.rejected` 事件。旧 Worker 猜到新 epoch、或拿新 attempt 的 id，同样会被拒。
-4. **控制面重启补偿。** 服务启动时把所有 running lease 延长到 `now + lease_ttl`：控制面停机期间 Worker 没法心跳，这段时间不该算到它们头上。这只会让 owner 保持 owner（epoch 不变），不会产生第二个权威 attempt。
+4. **控制面重启补偿。** 控制面停机期间 Worker 没法心跳，这段时间不该算到它们头上。每次 sweep 都把 `last_alive` 写进数据库；启动时，只对"在 last_alive 时刻仍有效"的 lease 顺延**实际停机时长**。已经过期的 lease 不会复活，快速崩溃重启也只累加真实的不可用时间。这只会让 owner 保持 owner（epoch 不变），不会产生第二个权威 attempt。
 5. **幂等。**
    - claim：`request_id` 唯一。响应丢失后用同一个 id 重试，拿到的是同一个 attempt（`replay: true`），不会再领第二个 Job。
-   - complete / fail / release：同一 attempt 已经处于目标终态时，直接重放已记录的结果（即使 lease 早已过期）；与已记录结果矛盾（例如 fail 之后 complete）返回 `409 conflict`。
+   - complete / fail / release：同一 attempt 已经处于目标终态时，直接重放已记录的结果（即使 lease 早已过期）；与已记录结果矛盾（例如 fail 之后 complete）返回 `409 conflict`。条件更新未命中时会重读 attempt：与第一次请求重叠的重试（PostgreSQL 上两者都在等同一把行锁）得到的是重放，不是误报的 stale。
    - heartbeat：天然幂等。
    - 建 Job：`key` 唯一（`INSERT ... ON CONFLICT (key) DO NOTHING`），并发重复提交也只得到一个 Job。
 
@@ -221,7 +221,9 @@ loop:  inbox sync（如配置）→ 配置变了就重新注册，否则 worker 
 | 控制面重启 | 状态都在数据库里；启动时补偿 lease；Worker 的调用在停机期间得到 `unavailable`，它们继续干活并重试 |
 | 数据库 / 网络瞬时故障 | 统一为 `503 unavailable`：不标失败、不杀进程；Worker 保留待上报的结果，稍后用同一个 request id 重试 |
 | launcher 意外退出 | 没有结果：以 `launcher_exited` 失败（默认不可重试，`retry_on_launcher_exit = true` 则重排）。有结果：照常完成 |
-| Agent 完成但上报失败 | 报告连同 request id 写进 `worker.json`，跨 Worker 重启重试；服务端幂等重放；`report_attempts` 计入 `result_report_retries` |
+| 上报的结果被服务端拒收（422，例如字段超长） | 不会无限重发：改为以 `report_rejected` 失败上报。结构化结果的每个字段在 Worker 端先截断 |
+| shared checkout 里还有 stale 会话在跑 | 这个 checkout 继续算作忙碌，新 attempt 不会进来（否则旧会话写的 DELIVERY.md 会被当成新 attempt 的结果） |
+| Agent 完成但上报失败 | 报告连同 request id 写进 `worker.json`，跨 Worker 重启重试，等待期间继续续租；服务端幂等重放；`report_attempts` 计入 `result_report_retries` |
 | 超时（`timeout_seconds`） | 停止会话，以 `timeout` 失败，不可重试 |
 | lease 过期期间无人接手，owner 恢复 | 仍被拒绝（过期即失效）。Worker 标 stale，Job 由下一次 claim 重新执行 |
 

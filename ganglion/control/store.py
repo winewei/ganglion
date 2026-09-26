@@ -230,6 +230,13 @@ class Tx:
         return self.store._rowcount(self.cur) == 1
 
     # -- named queries -------------------------------------------------------------------
+    def get_meta_float(self, k: str) -> float | None:
+        row = self.one("SELECT v FROM meta WHERE k = ?", (k,))
+        return float(row["v"]) if row else None
+
+    def set_meta(self, k: str, v: Any) -> None:
+        self._exec("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v", (k, str(v)))
+
     def job_by_key(self, key: str) -> dict[str, Any] | None:
         return self.one("SELECT * FROM jobs WHERE key = ?", (key,))
 

@@ -35,6 +35,7 @@ DELIVERY_FILE = "DELIVERY.md"
 DELIVERY_PREVIEW_LINES = 20
 RESULT_SCHEMA = "ganglion.engineering-result/v1"
 FAILED_STATUSES = {"failed", "aborted", "error"}
+SUMMARY_MAX = 16000  # below the API limit; the control plane stores at most 4000
 
 DEFAULT_LAUNCH_PROMPT = (
     "/spine-run --auto 需求 {id}：详见 {req_path}/{id}.md（先完整阅读该文件）。"
@@ -105,12 +106,16 @@ class SpineAdapter:
             return None  # absent or half-written: not finished yet
         if not isinstance(doc, dict) or doc.get("schema") != RESULT_SCHEMA:
             return None
+        def s(key: str, limit: int) -> str | None:  # the agent wrote this file: bound every field
+            v = doc.get(key)
+            return None if v is None else str(v)[:limit]
+
         return {
-            "status": str(doc.get("status") or "completed"),
-            "run_id": doc.get("run_id"),
-            "final_sha": doc.get("final_sha"),
-            "summary": doc.get("summary"),
-            "result_uri": doc.get("result_uri"),
+            "status": s("status", 64) or "completed",
+            "run_id": s("run_id", 200),
+            "final_sha": s("final_sha", 64),
+            "summary": s("summary", SUMMARY_MAX),
+            "result_uri": s("result_uri", 2000),
             "source": "spine-result",
         }
 
