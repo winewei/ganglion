@@ -7,10 +7,10 @@
     ganglion metrics
     ganglion status                        local attempts + recent jobs
     ganglion retry ID                      = job retry (accepts a job id, key or inbox id)
-    ganglion run | once                    1.x names for `worker start` / `worker once`
+    ganglion run | once                    0.1.x names for `worker start` / `worker once`
     ganglion stop-hook                     Claude Code Stop hook (called by hooks/stop.sh)
 
-With ``control_plane = "local"`` (the default, and what a 1.x config maps to) the worker
+With ``control_plane = "local"`` (the default, and what a 0.1.x config maps to) the worker
 embeds the control plane on SQLite: no server, no PostgreSQL, same Job/Attempt semantics.
 """
 
@@ -148,7 +148,7 @@ def cmd_retry(cfg: Config, ident: str) -> int:
     old = legacy.forget(cfg.state_dir, ident)
     if cfg.inbox_dir is not None:
         make_inbox(cfg, client).forget(ident)
-    print(f"{ident}: no job found; cleared 1.x record (previous status {old}); the inbox will resubmit it")
+    print(f"{ident}: no job found; cleared 0.1.x record (previous status {old}); the inbox will resubmit it")
     return 0
 
 
@@ -168,8 +168,8 @@ def cmd_job_submit(cfg: Config, a: argparse.Namespace) -> int:
 def stop_hook(stdin_text: str = "") -> int:
     """Claude Code Stop hook. Always 0 and silent: a hook must never keep claude from stopping.
 
-    2.x sessions: nudge the worker (touch ``<state>/wake``) so it looks for the result now;
-    the worker -- not the hook -- decides and reports. 1.x sessions: 1.x behaviour.
+    0.2.x sessions: nudge the worker (touch ``<state>/wake``) so it looks for the result now;
+    the worker -- not the hook -- decides and reports. 0.1.x sessions: 0.1.x behaviour.
     """
     state_dir = os.environ.get("GANGLION_STATE", "")
     if not state_dir:
@@ -183,13 +183,13 @@ def stop_hook(stdin_text: str = "") -> int:
         return 0
     rid = os.environ.get("GANGLION_ID", "")
     if rid:
-        from .legacy import stop_hook_v1
+        from .legacy import stop_hook_legacy
 
         try:
             hook_in = json.loads(stdin_text) if stdin_text.strip() else {}
         except json.JSONDecodeError:
             hook_in = {}
-        return stop_hook_v1(rid, sd, hook_in)
+        return stop_hook_legacy(rid, sd, hook_in)
     return 0
 
 
@@ -224,8 +224,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", default=DEFAULT_CONFIG)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("run", help="alias of `worker start` (1.x name)")
-    sub.add_parser("once", help="alias of `worker once` (1.x name)")
+    sub.add_parser("run", help="alias of `worker start` (0.1.x name)")
+    sub.add_parser("once", help="alias of `worker once` (0.1.x name)")
     sub.add_parser("status")
     sub.add_parser("stop-hook")
     sub.add_parser("metrics")

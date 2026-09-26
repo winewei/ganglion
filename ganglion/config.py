@@ -8,7 +8,7 @@
   single-machine mode (``control_plane = "local"``) the worker embeds it.
 * ``[notify]`` -- notification backend (shared by whichever side notifies).
 
-A Ganglion 1.x file (a ``[ganglion]`` table) is still accepted and mapped onto local mode,
+A Ganglion 0.1.x file (a ``[ganglion]`` table) is still accepted and mapped onto local mode,
 so ``ganglion run`` keeps working with an unchanged config.
 """
 
@@ -159,7 +159,7 @@ def load_config(path: str | os.PathLike[str]) -> Config:
 
 
 def _load_legacy(path: Path, raw: dict[str, Any]) -> Config:
-    """Ganglion 1.x ``[ganglion]`` config -> single-machine mode with 1.x semantics."""
+    """Ganglion 0.1.x ``[ganglion]`` config -> single-machine mode with 0.1.x semantics."""
     g = raw["ganglion"]
     if "inbox_dir" not in g or "state_dir" not in g:
         raise ValueError("config: [ganglion] must set inbox_dir and state_dir")
@@ -172,7 +172,7 @@ def _load_legacy(path: Path, raw: dict[str, Any]) -> Config:
         workspace_root=state_dir / "workspaces",
         poll_interval=float(g.get("poll_interval", 60)),
         max_concurrent=int(g.get("max_concurrent", 8)),
-        # 1.x ran concurrent sessions inside the mapped checkout itself; 2.x gives each
+        # 0.1.x ran concurrent sessions inside the mapped checkout itself; 0.2.x gives each
         # attempt its own worktree instead (set isolation = "shared" for in-place, serialised).
         isolation=str(g.get("isolation", "worktree")),
         new_repo_root=expand(g.get("new_repo_root", "~/code")),
@@ -186,7 +186,7 @@ def _load_legacy(path: Path, raw: dict[str, Any]) -> Config:
         legacy_state=state_dir / "state.json",
         database=f"sqlite:///{state_dir / 'control.db'}",
         max_depth=int(g.get("max_depth", 3)),
-        # 1.x never relaunched automatically; keep a single attempt unless configured.
+        # 0.1.x never relaunched automatically; keep a single attempt unless configured.
         max_attempts=int(g.get("max_attempts", 1)),
         notify=dict(raw.get("notify", {})),
         legacy_format=True,

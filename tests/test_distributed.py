@@ -4,7 +4,7 @@ Each worker has its own state dir, workspace root and tmux server (standing in f
 machines); jobs name a repository URL (a local bare repo standing in for a Git host).
 Uses PostgreSQL when GANGLION_TEST_PG_DSN is set, SQLite otherwise.
 
-Scenario (the Ganglion 2.0 acceptance scenario):
+Scenario (the Ganglion 0.2 acceptance scenario):
   1. A and B race for one job; exactly one claims, prepares, launches, heartbeats, completes.
   2. The owning worker is SIGKILLed mid-run (its agent keeps running). The lease expires;
      the other worker claims a new attempt (epoch 2). The old agent then finishes and the

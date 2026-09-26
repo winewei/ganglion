@@ -4,8 +4,8 @@
 #
 # - Without GANGLION_ID / GANGLION_STATE (a session Ganglion did not launch) it exits at once,
 #   so normal manual Claude Code use is unaffected.
-# - 2.x sessions: it only wakes the worker, which collects and reports the result.
-#   Sessions launched by 1.x keep the 1.x behaviour (DELIVERY.md -> notify once).
+# - 0.2.x sessions: it only wakes the worker, which collects and reports the result.
+#   Sessions launched by 0.1.x keep the 0.1.x behaviour (DELIVERY.md -> notify once).
 # - Always exit 0 and print nothing: a failing hook must never keep claude from stopping.
 
 [ -n "$GANGLION_ID" ] || exit 0

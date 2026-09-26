@@ -73,7 +73,7 @@ class SpineAdapter:
             "GANGLION_JOB_ID": job_id,
             "GANGLION_ATTEMPT_ID": attempt_id,
             "GANGLION_EPOCH": str(epoch),
-            "GANGLION_ID": name,  # 1.x name, kept for hooks/scripts that used it
+            "GANGLION_ID": name,  # 0.1.x name, kept for hooks/scripts that used it
             "GANGLION_RESULT_FILE": str(result_file),
         }
 

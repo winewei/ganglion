@@ -1,6 +1,6 @@
 """Interactive Claude Code in tmux (the production launcher on macOS; also works on Linux).
 
-Behaviour carried over from Ganglion 1.x, each item covered by tests:
+Behaviour carried over from Ganglion 0.1.x, each item covered by tests:
 
 * exact tmux session identity: ``list-sessions`` + string equality, and ``=name:`` targets,
   because ``has-session -t gl-a`` prefix-matches ``gl-ab``;

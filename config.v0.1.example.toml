@@ -1,4 +1,4 @@
-# Ganglion 1.x 配置格式（仍然受支持：映射为单机模式）。新部署请用 config.example.toml。
+# Ganglion 0.1.x 配置格式（仍然受支持：映射为单机模式）。新部署请用 config.example.toml。
 # 路径均支持 ~ 和 $VAR 展开。主循环每轮都会重新读取本文件，
 # 所以给 manual 需求补 [repos] 映射不需要重启 Ganglion。
 

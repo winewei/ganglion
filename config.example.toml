@@ -1,5 +1,5 @@
-# Ganglion 2.x configuration. Copy to ~/.config/ganglion/config.toml and edit.
-# Paths accept ~ and $VAR. A Ganglion 1.x file ([ganglion] table, see config.v1.example.toml)
+# Ganglion 0.2.x configuration. Copy to ~/.config/ganglion/config.toml and edit.
+# Paths accept ~ and $VAR. A Ganglion 0.1.x file ([ganglion] table, see config.v0.1.example.toml)
 # is still accepted and runs in single-machine mode.
 #
 # The same file format serves three roles; each machine only needs the sections it uses:
@@ -36,7 +36,7 @@ max_concurrent = 4
 
 # Jobs on a [repos] checkout: "worktree" gives every attempt its own git worktree and
 # branch ganglion/<job>-<attempt> (default); "shared" runs in the checkout itself, one
-# attempt at a time (the 1.x layout).
+# attempt at a time (the 0.1.x layout).
 isolation = "worktree"
 
 # "branch": push the attempt's branch to origin when it finishes, so the result outlives

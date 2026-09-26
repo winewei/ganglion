@@ -27,7 +27,7 @@ from .notify import Notifier, safe_notify
 
 KEY_PREFIX = "inbox:"
 MEMO_FILE = "inbox.json"
-# 1.x statuses meaning "already handled; do not submit again"
+# 0.1.x statuses meaning "already handled; do not submit again"
 LEGACY_HANDLED = {"launched", "delivered", "rejected", "error"}
 
 
@@ -110,7 +110,7 @@ def submission_order(reqs: dict[str, Requirement]) -> tuple[list[str], set[str]]
 
 
 def legacy_handled(legacy_state: Path | None) -> dict[str, str]:
-    """Compatibility read path for Ganglion 1.x ``state.json``: ids it already handled."""
+    """Compatibility read path for Ganglion 0.1.x ``state.json``: ids it already handled."""
     if not legacy_state or not legacy_state.exists():
         return {}
     try:

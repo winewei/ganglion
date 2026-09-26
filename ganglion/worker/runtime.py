@@ -12,7 +12,7 @@ Two layers of truth, never confused:
   something just because one side cannot be observed right now: "unknown" stays unknown
   until it can be resolved.
 
-Crash safety carried over from 1.x: state is written *before* each side effect (claim
+Crash safety carried over from 0.1.x: state is written *before* each side effect (claim
 request id before the claim, ``launching`` before the tmux session, the report and its
 request id before sending it), and every side effect is idempotent, so a crash at any
 point is resumed by simply doing the step again.

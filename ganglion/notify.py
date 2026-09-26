@@ -1,4 +1,4 @@
-"""Notification backends (unchanged behaviour from Ganglion 1.x).
+"""Notification backends (unchanged behaviour from Ganglion 0.1.x).
 
 Notification is presentation only: a failed send is logged and never affects job state.
 Who sends what (see DESIGN.md "Notifications"):

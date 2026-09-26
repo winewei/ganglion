@@ -81,7 +81,7 @@ class WorkerState:
 
 
 def local_event(state_dir: Path, kind: str, detail: str = "", **fields: Any) -> None:
-    """Worker-local diagnostics log (``events.jsonl``), as in 1.x. Not the audit trail."""
+    """Worker-local diagnostics log (``events.jsonl``), as in 0.1.x. Not the audit trail."""
     ev = {"ts": now(), "kind": kind, "detail": detail, **fields}
     try:
         state_dir.mkdir(parents=True, exist_ok=True)

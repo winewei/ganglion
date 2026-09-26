@@ -1,11 +1,11 @@
-"""Single-machine mode with an unchanged Ganglion 1.x config (``[ganglion]`` table).
+"""Single-machine mode with an unchanged Ganglion 0.1.x config (``[ganglion]`` table).
 
-Ports every 1.x test's intent. Differences are deliberate and documented in DESIGN.md:
+Ports every 0.1.x test's intent. Differences are deliberate and documented in DESIGN.md:
   * status lives in the embedded control plane (Job/Attempt) instead of state.json;
   * each attempt runs in its own git worktree (the user's checkout is not written to);
   * tmux sessions are named ``gl-<id>-<attempt>``; identity is the GANGLION_ATTEMPT_ID env;
   * completion is detected by the worker (the Stop hook only wakes it);
-  * a session that ends without a result is reported as a failed attempt (1.x kept it as
+  * a session that ends without a result is reported as a failed attempt (0.1.x kept it as
     "launched" forever); it is still never relaunched automatically (max_attempts = 1).
 """
 
@@ -429,14 +429,14 @@ class TestStopHook(Legacy):
         self.assertEqual(len(self.delivered()), 1)
         self.assertEqual(self.status("mid"), "running")
 
-    def test_v1_session_keeps_v1_hook_behaviour(self):
-        proj = self.make_project("v1proj")
+    def test_legacy_session_keeps_legacy_hook_behaviour(self):
+        proj = self.make_project("oldproj")
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "state.json").write_text(json.dumps({
             "version": 1, "config_path": str(self.config_path), "repos": {},
-            "requests": {"old": {"status": "launched", "project": str(proj), "repo": "v1proj", "launched_at": time.time() - 5}},
+            "requests": {"old": {"status": "launched", "project": str(proj), "repo": "oldproj", "launched_at": time.time() - 5}},
         }))
-        (proj / "DELIVERY.md").write_text("v1 done\n")
+        (proj / "DELIVERY.md").write_text("legacy done\n")
         env = {"GANGLION_ID": "old", "GANGLION_STATE": str(self.state_dir)}
         self.assertEqual(self.run_hook(env, cwd=proj).returncode, 0)
         self.assertEqual(self.run_hook(env, cwd=proj).returncode, 0)
@@ -450,7 +450,7 @@ class TestLegacyState(Legacy):
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "state.json").write_text(json.dumps({"version": 1, "requests": requests, "repos": {}}))
 
-    def test_handled_v1_requests_are_not_resubmitted(self):
+    def test_handled_legacy_requests_are_not_resubmitted(self):
         self.write_legacy({"old1": {"status": "launched"}, "old2": {"status": "error"}, "w": {"status": "waiting_repo"}})
         self.submit("old1")
         self.submit("old2")
@@ -458,10 +458,10 @@ class TestLegacyState(Legacy):
         self.once()
         self.assertIsNone(self.job("old1"))
         self.assertIsNone(self.job("old2"))
-        self.assertEqual(self.status("w"), "running")  # 1.x never started it
+        self.assertEqual(self.status("w"), "running")  # 0.1.x never started it
         self.assertEqual(self.invocations("old1"), [])
 
-    def test_retry_forgets_v1_record(self):
+    def test_retry_forgets_legacy_record(self):
         self.write_legacy({"old2": {"status": "error"}})
         self.submit("old2")
         self.once()
@@ -533,8 +533,8 @@ class TestRestart(Legacy):
         self.assertEqual(self.status("k1"), "running")
         self.assertIn(self.handle("k1"), self.sessions())  # the killed worker's session survived
 
-    def test_v1_entry_point_still_works(self):
-        # 1.x launchd plists run `ganglion.py --config <1.x config> run`
+    def test_legacy_entry_point_still_works(self):
+        # 0.1.x launchd plists run `ganglion.py --config <0.1.x config> run`
         self.submit("shim")
         q = subprocess.run([sys.executable, str(ROOT / "ganglion.py"), "--config", str(self.config_path), "once"],
                            capture_output=True, text=True)
@@ -650,7 +650,7 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(cfg.notify["backend"], "ntfy")
         self.assertIn("{id}", cfg.launch_prompt)
         self.assertEqual(cfg.control_plane, "local")
-        legacy = load_config(ROOT / "config.v1.example.toml")
+        legacy = load_config(ROOT / "config.v0.1.example.toml")
         self.assertTrue(legacy.legacy_format)
         self.assertTrue(legacy.local)
 

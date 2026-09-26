@@ -1,4 +1,4 @@
-# Ganglion 2.0
+# Ganglion 0.2
 
 一个小型的**分布式控制面 + 一次性 Worker 运行时**：接收工程 Job，把它安全地分给某台 Worker；Worker 准备仓库和环境，在 tmux 里以交互模式拉起 Claude Code 执行 [Agent Spine](https://github.com/winewei/agent-spine) 的 `/spine-run --auto`，持有并续租执行权，最后上报结果。
 
@@ -10,7 +10,7 @@ Ganglion 不含任何软件工程智能。规划、实现、review、修复、�
                                                                      │ 心跳 → 识别结果 → 上报
 ```
 
-- **单机用户什么都不用改**：1.x 的配置文件和 `ganglion.py … run` 照常可用，控制面内嵌在 Worker 进程里（SQLite），不需要服务器，也不需要 PostgreSQL。
+- **单机用户什么都不用改**：0.1.x 的配置文件和 `ganglion.py … run` 照常可用，控制面内嵌在 Worker 进程里（SQLite），不需要服务器，也不需要 PostgreSQL。
 - **多机**：部署一个控制面（`docker compose`），每台机器跑 `ganglion worker start`。
 
 设计、状态机和故障语义见 [DESIGN.md](DESIGN.md)。HTTP 协议以 [openapi.json](openapi.json) 为准（由代码生成，测试校验一致）。
@@ -18,9 +18,9 @@ Ganglion 不含任何软件工程智能。规划、实现、review、修复、�
 | 文件 | 作用 |
 |---|---|
 | `ganglion/` | 实现：`control/`（控制面）、`worker/`、`launchers/`、`spine.py`、`inbox.py`、`cli.py` |
-| `bin/ganglion` | 免安装入口（`ganglion.py` 是给 1.x 部署保留的兼容入口） |
+| `bin/ganglion` | 免安装入口（`ganglion.py` 是给 0.1.x 部署保留的兼容入口） |
 | `hooks/stop.sh` | Claude Code Stop hook |
-| `config.example.toml` / `config.v1.example.toml` | 2.x 配置示例 / 1.x 配置格式（仍受支持） |
+| `config.example.toml` / `config.v0.1.example.toml` | 0.2.x 配置示例 / 0.1.x 配置格式（仍受支持） |
 | `openapi.json` | API 契约 |
 | `Dockerfile`、`deploy/docker-compose.yml`、`deploy/control.toml` | 控制面部署 |
 | `deploy/com.ganglion.plist`、`deploy/ganglion-worker.service` | Worker：launchd（macOS）/ systemd（Linux） |
@@ -45,7 +45,7 @@ npc doctor
 
 ## 单机（一台 Mac）
 
-1.x 用户：`git pull` 即可。旧配置、旧 plist、旧 hook 路径都不用改。迁移细节见 DESIGN.md 第十一节。
+0.1.x 用户：`git pull` 即可。旧配置、旧 plist、旧 hook 路径都不用改。迁移细节见 DESIGN.md 第十一节。
 
 新用户：
 
@@ -109,7 +109,7 @@ my-app = "~/code/my-app"
 
 ## 提交 Job
 
-**Git inbox**（和 1.x 一样）：一个 `<id>.md` 就是一条需求，文件名就是 Job 名。
+**Git inbox**（和 0.1.x 一样）：一个 `<id>.md` 就是一条需求，文件名就是 Job 名。
 
 ```markdown
 ---
@@ -170,7 +170,7 @@ GANGLION_TEST_PG_DSN=postgresql://postgres@127.0.0.1:5432/ganglion_test \
 | `test_control_plane.py` | claim 竞争（单 Job、多 Job）、丢失 claim 响应、FIFO 与能力匹配、心跳（owner / 非 owner）、lease 过期与重新 claim、fencing（epoch 7/8 场景的全部操作）、完成 / 失败 / 释放的幂等、Job key 幂等（含并发）、重试预算、深度 / parent / 被拒 parent、准入、重启持久化、重启补偿、指标、结果紧凑 |
 | `test_api.py` | 认证（缺失 / 错误 token、无 token 拒绝启动）、HTTP 下的完整周期与 fencing、错误映射、服务器重启、OpenAPI 与实现一致 |
 | `test_worker.py` | 两 Worker 竞争、clone 工作区与结果分支发布、陈旧的本地进程永不上报（运行中 / 重启时两条路径）、`stale_policy=stop`、重启接管（有 / 无本地状态）、丢失的 claim / complete 响应、上报跨崩溃重试、控制面不可达不影响工作、未确认执行权不启动、结构化结果 / 失败 / 协议选择、launcher 退出重试、超时、shared 串行与 worktree 并发、映射消失时 release |
-| `test_local_compat.py` | 1.x 配置下的全部 1.x 行为（启动、manual 等映射、不重复启动、会话名精确匹配、错误隔离、非法 id、retry、深度 / 环、trust 预写与兜底、`~/.claude.json` 合并、Stop hook、端到端、`new` 仓库、kill -9 重启、单实例、两个崩溃点、状态丢失接管、ntfy、解析），以及 1.x 状态兼容、1.x 会话的 hook、`ganglion.py` 入口 |
+| `test_local_compat.py` | 0.1.x 配置下的全部 0.1.x 行为（启动、manual 等映射、不重复启动、会话名精确匹配、错误隔离、非法 id、retry、深度 / 环、trust 预写与兜底、`~/.claude.json` 合并、Stop hook、端到端、`new` 仓库、kill -9 重启、单实例、两个崩溃点、状态丢失接管、ntfy、解析），以及 0.1.x 状态兼容、0.1.x 会话的 hook、`ganglion.py` 入口 |
 | `test_distributed.py` | 控制面进程 + 两个 Worker 进程：竞争、完成、Worker 崩溃 → lease 过期 → 重新分配 → 旧 Worker 回来被隔离、控制面崩溃重启 |
 
 ## 已知限制

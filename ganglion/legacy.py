@@ -1,11 +1,11 @@
-"""Ganglion 1.x compatibility (``<state_dir>/state.json``).
+"""Ganglion 0.1.x compatibility (``<state_dir>/state.json``).
 
-2.x never treats 1.x state as authoritative distributed state. It is only used to:
+0.2.x never treats 0.1.x state as authoritative distributed state. It is only used to:
 
-* keep the inbox adapter from resubmitting requirements 1.x already handled
+* keep the inbox adapter from resubmitting requirements 0.1.x already handled
   (see ``inbox.legacy_handled``);
-* let ``ganglion retry <id>`` forget a 1.x entry, exactly like 1.x ``retry`` did;
-* keep the Stop hook working for claude sessions that 1.x launched before the upgrade
+* let ``ganglion retry <id>`` forget a 0.1.x entry, exactly like 0.1.x ``retry`` did;
+* keep the Stop hook working for claude sessions that 0.1.x launched before the upgrade
   (they carry ``GANGLION_ID`` but no ``GANGLION_ATTEMPT_ID``): same DELIVERY.md check,
   same once-only "delivered" notification, same state update.
 """
@@ -45,14 +45,14 @@ def locked_legacy_state(state_dir: Path) -> Iterator[dict[str, Any]]:
 
 
 def forget(state_dir: Path, rid: str) -> str | None:
-    """Remove a 1.x request record. Returns its old status (None if absent)."""
+    """Remove a 0.1.x request record. Returns its old status (None if absent)."""
     with locked_legacy_state(state_dir) as st:
         r = (st.get("requests") or {}).pop(rid, None)
     return r and r.get("status")
 
 
-def stop_hook_v1(rid: str, state_dir: Path, hook_in: dict[str, Any]) -> int:
-    """1.x Stop hook semantics for sessions launched by 1.x. Always returns 0."""
+def stop_hook_legacy(rid: str, state_dir: Path, hook_in: dict[str, Any]) -> int:
+    """0.1.x Stop hook semantics for sessions launched by 0.1.x. Always returns 0."""
     with locked_legacy_state(state_dir) as st:
         r = (st.get("requests") or {}).get(rid)
         if r is None:

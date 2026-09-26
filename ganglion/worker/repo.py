@@ -7,9 +7,9 @@ Workspace strategies (the job never carries a local path):
   fetched, and every attempt gets its own clone under ``<workspace_root>/attempts``.
 * ``target: existing|manual`` -> the worker's own ``[repos]`` mapping. With
   ``isolation = "worktree"`` (default) each attempt gets a ``git worktree`` on its own branch
-  ``ganglion/<name>-<attempt>``; with ``"shared"`` (1.x behaviour) the attempt runs in the
+  ``ganglion/<name>-<attempt>``; with ``"shared"`` (0.1.x behaviour) the attempt runs in the
   checkout itself and the worker never runs two attempts in it at once.
-* ``target: new`` -> ``gh repo create`` + ``gh repo clone`` into ``new_repo_root`` (1.x
+* ``target: new`` -> ``gh repo create`` + ``gh repo clone`` into ``new_repo_root`` (0.1.x
   behaviour, crash-safe: an existing remote is adopted). A brand-new repo has no commit to
   branch from, so it is used in place (shared).
 

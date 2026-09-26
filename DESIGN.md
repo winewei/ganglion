@@ -1,6 +1,6 @@
-# Ganglion 2.0 设计说明
+# Ganglion 0.2 设计说明
 
-Ganglion 2.0 是一个**小型分布式 Job/Worker 系统**：控制面接收工程 Job，把它安全地交给某个 Worker；Worker 准备环境、拉起 Agent Spine、持有并续租执行权、上报结果。它不是 Agent 框架，不含任何软件工程智能。
+Ganglion 0.2 是一个**小型分布式 Job/Worker 系统**：控制面接收工程 Job，把它安全地交给某个 Worker；Worker 准备环境、拉起 Agent Spine、持有并续租执行权、上报结果。它不是 Agent 框架，不含任何软件工程智能。
 
 协议的权威定义是 API schema（`openapi.json`，由 `ganglion/control/api.py` 生成，测试保证两者一致）。本文件只讲架构、状态机和取舍，不重复字段级定义。
 
@@ -36,7 +36,7 @@ Ganglion 2.0 是一个**小型分布式 Job/Worker 系统**：控制面接收工
    spine.py: /spine-run --auto；结构化结果 or DELIVERY.md
 ```
 
-单机模式（`control_plane = "local"`，1.x 配置的默认映射）：Worker 进程内嵌同一个 `ControlPlane`，存储用 SQLite。**同一套 Job/Attempt/fencing 代码**，没有第二条路径；只是少了 HTTP 和 PostgreSQL。
+单机模式（`control_plane = "local"`，0.1.x 配置的默认映射）：Worker 进程内嵌同一个 `ControlPlane`，存储用 SQLite。**同一套 Job/Attempt/fencing 代码**，没有第二条路径；只是少了 HTTP 和 PostgreSQL。
 
 ### 模块
 
@@ -53,14 +53,14 @@ Ganglion 2.0 是一个**小型分布式 Job/Worker 系统**：控制面接收工
 | `launchers/claude.py` | tmux 会话、trust 预写与兜底、精确会话识别 |
 | `spine.py` | Agent Spine adapter：prompt、环境变量契约、结果识别 |
 | `inbox.py` | Git inbox → Job（幂等键 `inbox:<id>`） |
-| `legacy.py` | 1.x `state.json` 的兼容读取、1.x 会话的 Stop hook |
-| `notify.py` | ntfy / file / null / 自定义后端（与 1.x 相同） |
+| `legacy.py` | 0.1.x `state.json` 的兼容读取、0.1.x 会话的 Stop hook |
+| `notify.py` | ntfy / file / null / 自定义后端（与 0.1.x 相同） |
 
 Worker 与单机模式只依赖标准库；`fastapi / uvicorn / pydantic / psycopg` 只有控制面服务器需要（`pip install .[server]`）。
 
 ### 旧 → 新
 
-| 1.x (`ganglion.py`) | 2.0 |
+| 0.1.x (`ganglion.py`) | 2.0 |
 |---|---|
 | `State` 里的 requests 状态机、去重、`retry` | 控制面 Job/Attempt（`service.py`）；`retry` = `POST /v1/jobs/{id}/retry` |
 | `compute_depth`（扫 inbox 算深度） | 控制面准入：`parent_job_id` + `depth` + `max_depth`，parent 必须已存在 |
@@ -163,7 +163,7 @@ loop:  inbox sync（如配置）→ 配置变了就重新注册，否则 worker 
 **先确认再启动**：准备工作区前、以及启动进程前各心跳一次。拿不到确认（控制面不可达）就不启动；被拒绝就转 `stale`。
 
 **工作区隔离**：一个可写目录同一时间只给一个 attempt。
-- `[repos]` 映射的仓库：默认 `isolation = "worktree"`，每个 attempt 一个 `git worktree`，分支 `ganglion/<job>-<attempt 前 8 位>`。用户自己的 checkout 不会被写入。`isolation = "shared"` 就在 checkout 里跑（1.x 布局），同一 Worker 对同一个 checkout 串行（claim 时带 `exclude_repos`）。
+- `[repos]` 映射的仓库：默认 `isolation = "worktree"`，每个 attempt 一个 `git worktree`，分支 `ganglion/<job>-<attempt 前 8 位>`。用户自己的 checkout 不会被写入。`isolation = "shared"` 就在 checkout 里跑（0.1.x 布局），同一 Worker 对同一个 checkout 串行（claim 时带 `exclude_repos`）。
 - 带 URL 的 Job：`<workspace_root>/cache/` 下的 mirror 做缓存（clone 或 `remote update`），每个 attempt 从它 `clone --reference --dissociate` 出独立目录。
 - `target: new`：`gh repo create` + `gh repo clone`（远端已存在就直接用）；新仓库没有提交可分支，所以就地运行（shared）。
 - Spine 在工作区内部建自己的 worktree，Ganglion 不碰。
@@ -175,23 +175,23 @@ loop:  inbox sync（如配置）→ 配置变了就重新注册，否则 worker 
 
 **当前 Spine（1.9.1）没有面向外部编排的接口**：没有 job_id / attempt_id / run_id 入参，没有结构化结果文件；运行状态在 `~/task_log/<PROJ_KEY>/` 下，属于 Spine 内部。因此：
 
-- 启动方式不变：交互式 `claude "/spine-run --auto …"`（prompt 可配置），环境变量额外导出 `GANGLION_JOB_ID / GANGLION_ATTEMPT_ID / GANGLION_EPOCH / GANGLION_RESULT_FILE`（以及 1.x 的 `GANGLION_ID`、`GANGLION_STATE`）。
+- 启动方式不变：交互式 `claude "/spine-run --auto …"`（prompt 可配置），环境变量额外导出 `GANGLION_JOB_ID / GANGLION_ATTEMPT_ID / GANGLION_EPOCH / GANGLION_RESULT_FILE`（以及 0.1.x 的 `GANGLION_ID`、`GANGLION_STATE`）。
 - 结果识别集中在 `SpineAdapter.collect()`，版本相关逻辑不外溢：
   - **结构化结果**（给 Spine 2.x 的契约）：`$GANGLION_RESULT_FILE` 里的 `{"schema":"ganglion.engineering-result/v1","status",…,"run_id","final_sha","summary","result_uri"}`；`status` 为 failed 时 attempt 以 `spine_failed` 失败。
   - **DELIVERY.md**（兼容当前 Spine）：launch prompt 要求 Agent 收尾时在工作区根目录写它；只认启动之后写的；前 20 行作为 summary，`final_sha` 取工作区 HEAD。
   - `spine_protocol = "auto"`（默认，结构化优先，缺失则回退 DELIVERY.md）、`"1"`、`"2"`。
 - 控制面只收到紧凑结果，从不读取 Spine 文件。
 
-以下 1.x 发现的问题仍然成立，处理方式不变：spine-run 本身不写 DELIVERY.md（由 prompt 要求）；子 agent 会继承环境并触发 Stop hook（hook 现在只唤醒 Worker，判定按记录的工作区路径做，天然去重）；spine-run 需要 `worktree.baseRef=head`、npc / openspec 等依赖（部署文档里说明）；非 `--auto` 会卡在 AskUserQuestion（默认带 `--auto`）；新建仓库为空（需求提交成为第一个 commit）。
+以下 0.1.x 发现的问题仍然成立，处理方式不变：spine-run 本身不写 DELIVERY.md（由 prompt 要求）；子 agent 会继承环境并触发 Stop hook（hook 现在只唤醒 Worker，判定按记录的工作区路径做，天然去重）；spine-run 需要 `worktree.baseRef=head`、npc / openspec 等依赖（部署文档里说明）；非 `--auto` 会卡在 AskUserQuestion（默认带 `--auto`）；新建仓库为空（需求提交成为第一个 commit）。
 
-**ClaudeCodeLauncher**（`prepare / start / after_start / is_alive / stop / discover`）保留了 1.x 的全部生产细节：
+**ClaudeCodeLauncher**（`prepare / start / after_start / is_alive / stop / discover`）保留了 0.1.x 的全部生产细节：
 - 用 `list-sessions` 精确比较会话名，`=name:` 作 target。`has-session -t gl-a` 会前缀匹配到 `gl-ab`。
 - trust 预写：合并写入、保留文件权限、遇到半截 JSON 退避重试、绝不覆盖解析不了的文件、同时写 absolute 和 realpath 两个 key。
 - trust 兜底：在 `trust_wait` 秒内轮询屏幕，看到 trust 提示就发一次 Enter。
 - 用 `shlex.join` 拼命令；launchd 的 PATH 处理；`AbandonProcessGroup`。
 - 会话名 `gl-<job>-<attempt 前 8 位>`，每个 attempt 唯一。身份以会话环境变量 `GANGLION_ATTEMPT_ID` 为准，不解析名字。
 
-**Stop hook**：永远 `exit 0`、不输出。2.x 会话只 touch `<state_dir>/wake` 唤醒 Worker，由 Worker 判定、上报。1.x 启动的会话（只有 `GANGLION_ID`）保持 1.x 行为：DELIVERY.md → 改 1.x 状态 → 通知一次。
+**Stop hook**：永远 `exit 0`、不输出。0.2.x 会话只 touch `<state_dir>/wake` 唤醒 Worker，由 Worker 判定、上报。0.1.x 启动的会话（只有 `GANGLION_ID`）保持 0.1.x 行为：DELIVERY.md → 改 0.1.x 状态 → 通知一次。
 
 ## 八、通知
 
@@ -227,15 +227,15 @@ loop:  inbox sync（如配置）→ 配置变了就重新注册，否则 worker 
 | 超时（`timeout_seconds`） | 停止会话，以 `timeout` 失败，不可重试 |
 | lease 过期期间无人接手，owner 恢复 | 仍被拒绝（过期即失效）。Worker 标 stale，Job 由下一次 claim 重新执行 |
 
-## 十一、与 1.x 的兼容与迁移
+## 十一、与 0.1.x 的兼容与迁移
 
-- 1.x 配置文件（`[ganglion]` 表）原样可用，映射为单机模式：SQLite 在 `state_dir/control.db`，`max_attempts = 1`（1.x 从不自动重启），`max_concurrent = 8`。
+- 0.1.x 配置文件（`[ganglion]` 表）原样可用，映射为单机模式：SQLite 在 `state_dir/control.db`，`max_attempts = 1`（0.1.x 从不自动重启），`max_concurrent = 8`。
 - `ganglion.py --config … run` 仍然可用，旧 launchd plist 不用改。`hooks/stop.sh` 路径不变。
-- `~/.ganglion/state.json` **不会**被当作权威状态导入。它只作兼容读取：1.x 已处理过的需求（launched / delivered / rejected / error）inbox 不会再提交；`ganglion retry <id>` 会清掉对应的 1.x 记录（和 1.x 的 retry 一样），之后作为新 Job 提交。1.x 启动的会话由 1.x 语义的 Stop hook 收尾。
+- `~/.ganglion/state.json` **不会**被当作权威状态导入。它只作兼容读取：0.1.x 已处理过的需求（launched / delivered / rejected / error）inbox 不会再提交；`ganglion retry <id>` 会清掉对应的 0.1.x 记录（和 0.1.x 的 retry 一样），之后作为新 Job 提交。0.1.x 启动的会话由 0.1.x 语义的 Stop hook 收尾。
 - 主动改变的行为（都有测试覆盖）：
-  - 默认每个 attempt 在自己的 worktree 里运行，不再直接写用户 checkout。要 1.x 的布局就设 `isolation = "shared"`（同 checkout 串行）。
-  - 会话结束但没有结果，会记成失败的 attempt（1.x 永远停在 launched）。仍然不会自动重启。
-  - 非法 id 记为 `rejected`（1.x 记为 error）。
+  - 默认每个 attempt 在自己的 worktree 里运行，不再直接写用户 checkout。要 0.1.x 的布局就设 `isolation = "shared"`（同 checkout 串行）。
+  - 会话结束但没有结果，会记成失败的 attempt（0.1.x 永远停在 launched）。仍然不会自动重启。
+  - 非法 id 记为 `rejected`（0.1.x 记为 error）。
   - 状态查看用 `ganglion status`，不再是 state.json。
 - `events.jsonl` 保留为 Worker 本地诊断日志；审计以控制面 events 表为准。
 
