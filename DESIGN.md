@@ -4,17 +4,17 @@
 
 ## 一、对照 agent-spine 验证时发现的问题及处理
 
-我读了 agent-spine（`src/npc/playbooks/spine-run.md`、`npc git ensure-clean` 的实现、仓库自带的 `.claude/settings.json`），逐条检查了“Ganglion 拉起 → spine-run 执行 → DELIVERY.md → 通知”这条链路能不能走通。
+我读了 agent-spine（`src/npc/playbooks/spine-run.md`、仓库自带的 `.claude/settings.json`），逐条检查了“Ganglion 拉起 → spine-run 执行 → DELIVERY.md → 通知”这条链路能不能走通。
 
 | # | 问题 | 后果 | 处理 |
 |---|---|---|---|
 | 1 | spine-run 从头到尾**不会写 `DELIVERY.md`**。它的收尾产物是 `~/task_log/<proj>/<run>/run-summary.md`，外加对话里的一段汇报。 | Stop hook 永远不会通知“已交付”。 | 默认的 `launch_prompt` 明确要求 Agent 在收尾时于工程根目录写 `DELIVERY.md`，并把结论摘要写在前 20 行。 |
-| 2 | spine-run 的 Step 0 要求**工作区干净**。`npc git ensure-clean` 用的是 `git status --porcelain`，未跟踪文件也算脏。 | 投递的需求文件如果不提交，spine-run 一启动就会拒绝执行。上一条需求留下的未提交 `DELIVERY.md`，也会挡住同一工程里的下一条需求。 | 需求用 `git commit -- <path>` 单独提交，只提交这一个路径，不会卷走你暂存区里的其它改动。`launch_prompt` 要求 Agent 把 `DELIVERY.md` 也单独提交。 |
-| 3 | 同一个工程可能接连收到多条需求，而 `DELIVERY.md` 的文件名是固定的。 | 第二条需求一启动，Agent 第一次停下时就会被误判为“已交付”，读到的其实是上一条的报告。 | Stop hook 只认修改时间不早于本次 `launched_at` 的 `DELIVERY.md`。git checkout 不会改动内容没变的文件的 mtime，所以旧报告会被忽略。 |
-| 4 | spine-run 会用 `claude -p` 或原生子 agent 作为 coder / reviewer，这些子进程会继承 `GANGLION_ID`，也会触发 Stop hook，而且 cwd 可能在 worktree 里。 | 如果按 hook 进程的 cwd 去找 `DELIVERY.md`，会找错地方，也可能重复通知。 | hook 按状态文件里记录的工程路径（`requests[id].project`）查找 `DELIVERY.md`，只有找不到时才退回 `CLAUDE_PROJECT_DIR` 或 cwd。去重在 `flock` 保护下完成，多个进程同时触发也只会通知一次。 |
-| 5 | spine-run 需要 `worktree.baseRef=head`，还需要 `npc`、`openspec`、review engine 这些依赖。 | 缺任何一个，Agent 都会在 Step 0 停下并说明原因。 | 这些不在 Ganglion 的职责内（它不做 Agent 逻辑）。README 的部署步骤里写了要装什么、要配什么。 |
-| 6 | 非 `--auto` 模式下，spine-run 会在决策点调用 AskUserQuestion。 | 无人值守时会一直卡住。 | 默认 prompt 带 `--auto`。想走交互模式，改 `launch_prompt` 即可。 |
-| 7 | `target: new` 新建的仓库是空的，没有任何 commit。 | spine-run 要求在一个有名字的分支上。 | 投递需求时的 `req: <id>` 会成为这个仓库的第一个 commit，分支也就有了。`openspec/` 目录由 spine-run 拆解目标时自己处理，Ganglion 不管。 |
+| 2 | spine-run 会用 `claude -p` 或原生子 agent 作为 coder / reviewer，这些子进程会继承 `GANGLION_ID`，也会触发 Stop hook，而且 cwd 可能在 worktree 里。 | 如果按 hook 进程的 cwd 去找 `DELIVERY.md`，会找错地方，也可能重复通知。 | hook 按状态文件里记录的工程路径（`requests[id].project`）查找 `DELIVERY.md`，只有找不到时才退回 `CLAUDE_PROJECT_DIR` 或 cwd。去重在 `flock` 保护下完成，多个进程同时触发也只会通知一次。 |
+| 3 | spine-run 需要 `worktree.baseRef=head`，还需要 `npc`、`openspec`、review engine 这些依赖。 | 缺任何一个，Agent 都会在 Step 0 停下并说明原因。 | 这些不在 Ganglion 的职责内（它不做 Agent 逻辑）。README 的部署步骤里写了要装什么、要配什么。 |
+| 4 | 非 `--auto` 模式下，spine-run 会在决策点调用 AskUserQuestion。 | 无人值守时会一直卡住。 | 默认 prompt 带 `--auto`。想走交互模式，改 `launch_prompt` 即可。 |
+| 5 | `target: new` 新建的仓库是空的，没有任何 commit。 | spine-run 要求在一个有名字的分支上。 | 投递需求时的 `req: <id>` 会成为这个仓库的第一个 commit，分支也就有了。`openspec/` 目录由 spine-run 拆解目标时自己处理，Ganglion 不管。 |
+
+**关于工作区是否干净。** spine-run 的 Step 0 要求工作区干净（`npc git ensure-clean` 连未跟踪文件也算脏）。在 Ganglion 的实际流程里，这个条件天然满足：流水线先创建并提交需求（`req: <id>`），得到的是一个全新、干净的工程目录，然后才在里面用 tmux 启动 claude、执行 skill。所以不存在“工作区不干净”或“同一目录残留上一条需求的 `DELIVERY.md`”的问题。Stop hook 里仍保留了一个很便宜的防御：只认修改时间不早于本次启动时间的 `DELIVERY.md`。在全新目录里它永远不会生效，只在有人手工复用目录时起作用。
 
 ## 二、实现过程中发现的问题（都有测试覆盖）
 

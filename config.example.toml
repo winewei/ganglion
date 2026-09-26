@@ -27,9 +27,8 @@ new_repo_root = "~/code"
 req_path = "docs/requirements"
 
 # LAUNCH_PROMPT：作为 `claude '<prompt>'` 的初始输入，支持 {id} 与 {req_path} 占位符。
-# agent-spine 的 spine-run 本身不产出 DELIVERY.md，所以提示里必须要求它在收尾时写出
-# 并提交（提交是为了保持工作区干净：spine-run 下次在同一工程启动时要求 clean）。
-launch_prompt = "/spine-run --auto 需求 {id}：详见 {req_path}/{id}.md（先完整阅读该文件）。全部完成后，在工程根目录写 DELIVERY.md 作为交付报告（前 20 行写结论摘要），并单独 git commit 它。"
+# agent-spine 的 spine-run 本身不产出 DELIVERY.md，所以提示里必须要求它在收尾时写出。
+launch_prompt = "/spine-run --auto 需求 {id}：详见 {req_path}/{id}.md（先完整阅读该文件）。全部完成后，在工程根目录写 DELIVERY.md 作为交付报告（前 20 行写结论摘要）。"
 
 # claude 可执行文件。launchd 下 PATH 很短，建议写绝对路径（`which claude` 的结果）。
 claude_cmd = "claude"

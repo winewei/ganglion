@@ -73,8 +73,7 @@ TRUST_PATTERNS = [
 
 DEFAULT_LAUNCH_PROMPT = (
     "/spine-run --auto 需求 {id}：详见 {req_path}/{id}.md（先完整阅读该文件）。"
-    "全部完成后，在工程根目录写 DELIVERY.md 作为交付报告（前 20 行写结论摘要），"
-    "并单独 git commit 它。"
+    "全部完成后，在工程根目录写 DELIVERY.md 作为交付报告（前 20 行写结论摘要）。"
 )
 
 
@@ -850,7 +849,7 @@ def stop_hook(stdin_text: str = "") -> int:
             mtime = delivery.stat().st_mtime
         except FileNotFoundError:
             return 0  # Agent 只是阶段性停下
-        # 上一条需求留下的旧 DELIVERY.md 不算
+        # 防御：目录被手工复用时，启动前就存在的旧 DELIVERY.md 不算
         if mtime + 1 < float(r.get("launched_at", 0)):
             return 0
         r["status"] = S_DELIVERED
