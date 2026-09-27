@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -160,17 +161,32 @@ def _clone_workspace(cfg: Config, tag: str, repo: dict[str, Any]) -> Workspace:
 
 
 def deliver_requirement(workspace: Path, req_path: str, name: str, goal: str) -> str:
-    """Write the goal verbatim to ``<req_path>/<name>.md`` and commit it alone. Idempotent."""
+    """Write the goal verbatim to ``<req_path>/<name>.md`` and commit it alone. Idempotent.
+
+    Retries briefly on concurrent ``git`` lock failures: a previous attempt's agent in a
+    shared checkout may still be committing DELIVERY.md when we start preparing the next.
+    """
     rel = f"{req_path}/{name}.md" if req_path else f"{name}.md"
     dest = workspace / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     raw = goal.encode("utf-8")
     if not dest.exists() or dest.read_bytes() != raw:
         dest.write_bytes(raw)
-    git(workspace, "add", "--", rel)
-    if git(workspace, "status", "--porcelain", "--", rel).stdout.strip():
-        git(workspace, "commit", "-q", "-m", f"req: {name}", "--", rel)  # only this path
-    return git(workspace, "rev-parse", "HEAD").stdout.strip()
+    last: CmdError | None = None
+    for attempt in range(6):
+        try:
+            git(workspace, "add", "--", rel)
+            if git(workspace, "status", "--porcelain", "--", rel).stdout.strip():
+                git(workspace, "commit", "-q", "-m", f"req: {name}", "--", rel)  # only this path
+            return git(workspace, "rev-parse", "HEAD").stdout.strip()
+        except CmdError as e:
+            last = e
+            msg = str(e).lower()
+            if "cannot lock" not in msg and "index.lock" not in msg and "unable to create" not in msg:
+                raise
+            time.sleep(0.15 * (2**attempt))
+    assert last is not None
+    raise last
 
 
 def publish_branch(ws: Workspace) -> tuple[str | None, str | None]:
