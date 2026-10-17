@@ -1,0 +1,76 @@
+# Ganglion 0.1.x 配置格式（仍然受支持：映射为单机模式）。新部署请用 config.example.toml。
+# 路径均支持 ~ 和 $VAR 展开。主循环每轮都会重新读取本文件，
+# 所以给 manual 需求补 [repos] 映射不需要重启 Ganglion。
+
+[ganglion]
+# inbox 仓库在本机的 clone（Ganglion 每轮在这里执行 git pull --ff-only）。
+inbox_dir = "~/ganglion-inbox"
+
+# 状态目录：state.json（需求状态 + new 仓库映射）、events.jsonl（事件流水）、
+# hook.log（Stop hook 错误输出）、锁文件。会通过 GANGLION_STATE 传给 claude。
+state_dir = "~/.ganglion"
+
+# 轮询间隔（秒）。
+poll_interval = 60
+
+# MAX_DEPTH：source: agent 的需求沿 parent 链计算深度（human 为 0，每层 agent +1），
+# 超过该值即 rejected。parent 不存在或成环也会 rejected。
+max_depth = 2
+
+# OWNER：target: new 时 `gh repo create <owner>/<repo> --private` 的 owner（用户或组织）。
+owner = "your-github-name"
+
+# NEW_REPO_ROOT：target: new 新建的仓库 clone 到 <new_repo_root>/<repo>。
+new_repo_root = "~/code"
+
+# REQ_PATH：需求文件投递到 <工程>/<req_path>/<id>.md，并以 "req: <id>" 单独提交。
+req_path = "docs/requirements"
+
+# LAUNCH_PROMPT：作为 `claude '<prompt>'` 的初始输入，支持 {id} 与 {req_path} 占位符。
+# agent-spine 的 spine-run 本身不产出 DELIVERY.md，所以提示里必须要求它在收尾时写出。
+launch_prompt = "/spine-run --auto 需求 {id}：详见 {req_path}/{id}.md（先完整阅读该文件）。全部完成后，在工程根目录写 DELIVERY.md 作为交付报告（前 20 行写结论摘要）。"
+
+# claude 可执行文件。launchd 下 PATH 很短，建议写绝对路径（`which claude` 的结果）。
+claude_cmd = "claude"
+
+# 追加在 claude 与 prompt 之间的参数（按 shell 规则切分），例如
+# "--permission-mode acceptEdits"。默认空：权限由 ~/.claude/settings.json 决定。
+claude_args = ""
+
+# 要预写 trust 的 Claude Code 全局配置文件。一般不用改。
+claude_json = "~/.claude.json"
+
+# 启动后最多观察多少秒的 tmux 屏幕，期间若出现 trust 提示就回车一次（兜底）。
+trust_wait = 8
+
+# tmux socket 名（tmux -L）。留空 = 默认 server，`tmux -CC attach -t gl-<id>` 直接可用；
+# 若填写，attach 时也要带 -L <名字>。
+tmux_socket = ""
+
+# 每轮是否 git pull inbox。只在调试（手工往 inbox_dir 放文件）时关掉。
+git_pull = true
+
+# target: existing / manual 使用的 仓库名 → 本地路径 映射。
+# manual 需求会一直 waiting_repo，直到这里出现对应条目。
+[repos]
+# my-app = "~/code/my-app"
+
+[notify]
+# 通知后端：ntfy（默认）| file（写 JSONL，调试用）| null（只打日志）|
+# "python.module:factory"（自定义：factory(本表 dict) 返回带 send(title, message, tags) 的对象）。
+backend = "ntfy"
+
+# ntfy 服务地址；自建 ntfy 时改成自己的。
+ntfy_server = "https://ntfy.sh"
+
+# ntfy topic。公共 ntfy.sh 上 topic 即密码，请用足够长的随机串。
+ntfy_topic = "ganglion-change-me-to-something-random"
+
+# 自建 / 受保护 topic 的 access token（Bearer）。不需要则留空。
+ntfy_token = ""
+
+# 消息优先级 1-5。
+ntfy_priority = 3
+
+# backend = "file" 时的输出文件。
+file_path = "~/.ganglion/notifications.jsonl"

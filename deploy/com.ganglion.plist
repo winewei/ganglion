@@ -22,10 +22,11 @@
     <string>/usr/bin/caffeinate</string>
     <string>-i</string>
     <string>__PYTHON__</string>
-    <string>__GANGLION_DIR__/ganglion.py</string>
+    <string>__GANGLION_DIR__/bin/ganglion</string>
     <string>--config</string>
     <string>__CONFIG__</string>
-    <string>run</string>
+    <string>worker</string>
+    <string>start</string>
   </array>
 
   <key>WorkingDirectory</key>
