@@ -20,6 +20,7 @@ point is resumed by simply doing the step again.
 
 from __future__ import annotations
 
+import contextlib
 import platform as _platform
 import shutil
 import sys
@@ -180,6 +181,14 @@ class Worker:
             self.registered = False
         except Unavailable as e:
             log(f"control plane unavailable: {e}")
+        # Renew leases for already-running work before any long prepare can starve them:
+        # step() is serial, and preparing one attempt used to block heartbeats for others.
+        for att_id, rec in list(self._open_records().items()):
+            if rec["status"] == L_RUNNING:
+                try:
+                    self._heartbeat(rec)
+                except Exception:
+                    log(f"{att_id}: pre-step heartbeat failed:\n" + traceback.format_exc())
         for att_id, rec in self._open_records().items():
             try:
                 self.step(att_id)
@@ -225,9 +234,13 @@ class Worker:
         return max(0, self.cfg.max_concurrent - active)
 
     def busy_shared_repos(self) -> list[str]:
-        """Repo names whose shared checkout must not receive another attempt right now: an
-        attempt of ours is working in it, or a stale one's process may still be (its
-        DELIVERY.md would otherwise be mistaken for the next attempt's result)."""
+        """Repo names whose shared checkout must not receive another attempt right now.
+
+        A writable shared checkout is exclusive: an active attempt, or any attempt (including
+        done / stale) whose process may still be writing there, keeps it busy. Otherwise the
+        next attempt's ``git commit`` can race the previous agent's post-DELIVERY commit, and
+        a leftover DELIVERY.md can be mistaken for the next result.
+        """
         busy = set()
         for r in self.state.snapshot()["attempts"].values():
             if not r.get("repo_name") or (r.get("job") or {}).get("repository", {}).get("url"):
@@ -236,7 +249,7 @@ class Worker:
                 continue
             if r["status"] in LOCAL_ACTIVE:
                 busy.add(r["repo_name"])
-            elif r["status"] == L_STALE and r.get("handle") and self.launcher.is_alive(r["handle"]) is not False:
+            elif r.get("handle") and self.launcher.is_alive(r["handle"]) is not False:
                 busy.add(r["repo_name"])
         return sorted(busy)
 
@@ -310,48 +323,55 @@ class Worker:
         # Only start work we still own. If we cannot tell right now, wait.
         if self._heartbeat(rec, force=True) is not True:
             return
-        try:
-            with self.state.locked() as st:
-                local_repos = dict(st["repos"])
-            tag = repo_mod.attempt_tag(job, att_id)
-            ws = repo_mod.prepare_workspace(cfg, local_repos, job, tag)
-            if job["target"] == "new":
+        # Clone / trust pre-write can outlast lease_ttl; renew in the background so the
+        # control plane does not reassign mid-prepare (and so other attempts' leases are
+        # not the only ones that matter — see tick()'s pre-step renewals).
+        with self._holding_lease(rec) as lost:
+            try:
                 with self.state.locked() as st:
-                    st["repos"][ws.repo_name] = str(ws.path)
-            rec = self.state.update_attempt(att_id, workspace=str(ws.path), mode=ws.mode, branch=ws.branch)
-            sha = repo_mod.deliver_requirement(ws.path, cfg.req_path, job["name"], job.get("goal") or "")
-            result_file = cfg.state_dir / "results" / f"{att_id}.json"
-            result_file.parent.mkdir(parents=True, exist_ok=True)
-            launched_at = rec.get("launched_at") or now()
-            spec = LaunchSpec(
-                handle=f"{SESSION_PREFIX}{tag}",
-                workspace=ws.path,
-                prompt=self.adapter.prompt(job["name"]),
-                attempt_id=att_id,
-                env={
-                    **self.adapter.env(job_id=job["id"], attempt_id=att_id, epoch=rec["epoch"], name=job["name"], result_file=result_file),
-                    "GANGLION_STATE": str(cfg.state_dir.absolute()),
-                    "GANGLION_WORKSPACE": str(ws.path),
-                    "GANGLION_WS_MODE": ws.mode,
-                    "GANGLION_LAUNCHED_AT": repr(launched_at),
-                },
-            )
-            self.launcher.prepare(spec)
-        except repo_mod.RepoNotMapped as e:
-            # our registration is out of date; give the job back without spending its budget
-            self.registered = False
-            self._report(rec, "release", reason=str(e))
-            return
-        except (repo_mod.RepoConfigError, RuntimeError) as e:  # config problem / trust pre-write gave up
-            self._report(rec, "fail", reason="prepare_failed", message=str(e), retryable=False)
-            return
-        except (CmdError, OSError) as e:  # git/gh/network/disk: may succeed on another attempt
-            self._report(rec, "fail", reason="prepare_failed", message=str(e), retryable=True)
-            return
-        except Exception as e:  # a bug: surface it once instead of retrying silently every tick
-            log(f"{att_id}: prepare crashed:\n" + traceback.format_exc())
-            self._report(rec, "fail", reason="prepare_failed", message=f"internal error: {e!r}", retryable=False)
-            return
+                    local_repos = dict(st["repos"])
+                tag = repo_mod.attempt_tag(job, att_id)
+                ws = repo_mod.prepare_workspace(cfg, local_repos, job, tag)
+                if job["target"] == "new":
+                    with self.state.locked() as st:
+                        st["repos"][ws.repo_name] = str(ws.path)
+                rec = self.state.update_attempt(att_id, workspace=str(ws.path), mode=ws.mode, branch=ws.branch)
+                sha = repo_mod.deliver_requirement(ws.path, cfg.req_path, job["name"], job.get("goal") or "")
+                result_file = cfg.state_dir / "results" / f"{att_id}.json"
+                result_file.parent.mkdir(parents=True, exist_ok=True)
+                launched_at = rec.get("launched_at") or now()
+                spec = LaunchSpec(
+                    handle=f"{SESSION_PREFIX}{tag}",
+                    workspace=ws.path,
+                    prompt=self.adapter.prompt(job["name"]),
+                    attempt_id=att_id,
+                    env={
+                        **self.adapter.env(job_id=job["id"], attempt_id=att_id, epoch=rec["epoch"], name=job["name"], result_file=result_file),
+                        "GANGLION_STATE": str(cfg.state_dir.absolute()),
+                        "GANGLION_WORKSPACE": str(ws.path),
+                        "GANGLION_WS_MODE": ws.mode,
+                        "GANGLION_LAUNCHED_AT": repr(launched_at),
+                    },
+                )
+                self.launcher.prepare(spec)
+            except repo_mod.RepoNotMapped as e:
+                # our registration is out of date; give the job back without spending its budget
+                self.registered = False
+                self._report(rec, "release", reason=str(e))
+                return
+            except (CmdError, OSError) as e:  # git/gh/network/disk: may succeed on another attempt
+                # CmdError is a RuntimeError subclass — must be caught before RuntimeError.
+                self._report(rec, "fail", reason="prepare_failed", message=str(e), retryable=True)
+                return
+            except (repo_mod.RepoConfigError, RuntimeError) as e:  # config problem / trust pre-write gave up
+                self._report(rec, "fail", reason="prepare_failed", message=str(e), retryable=False)
+                return
+            except Exception as e:  # a bug: surface it once instead of retrying silently every tick
+                log(f"{att_id}: prepare crashed:\n" + traceback.format_exc())
+                self._report(rec, "fail", reason="prepare_failed", message=f"internal error: {e!r}", retryable=False)
+                return
+            if lost.is_set():
+                return
 
         if self._heartbeat(rec, force=True) is not True:  # re-confirm right before starting a process
             return
@@ -418,6 +438,40 @@ class Worker:
             self._report(rec, "complete", result=res)
 
     # ------------------------------------------------------------------ talking to the control plane
+    def _holding_lease(self, rec: dict[str, Any]):
+        """Renew the attempt's lease in a background thread for the duration of a long step.
+
+        ``prepare_workspace`` (URL clones especially) and trust pre-write can exceed
+        ``lease_ttl``. Without renewal the control plane expires the attempt and another
+        worker can claim it while we are still preparing.
+        """
+        stop = threading.Event()
+        lost = threading.Event()
+        ttl = float(self.server_settings.get("lease_ttl") or 300)
+        hb = float(self.heartbeat_interval)
+        # Renew often enough to keep the lease, but not faster than ~4 Hz in tests.
+        interval = max(0.25, min(hb if hb > 0 else 30.0, ttl / 4))
+
+        def loop() -> None:
+            while not stop.wait(interval):
+                ok = self._heartbeat(rec, force=True)
+                if ok is False:
+                    lost.set()
+                    return
+                # ok is True (renewed) or None (unreachable): keep trying either way
+
+        @contextlib.contextmanager
+        def cm():
+            t = threading.Thread(target=loop, name=f"lease-{rec['attempt_id']}", daemon=True)
+            t.start()
+            try:
+                yield lost
+            finally:
+                stop.set()
+                t.join(timeout=interval + 2.0)
+
+        return cm()
+
     def _heartbeat(self, rec: dict[str, Any], force: bool = False) -> bool | None:
         """True: still ours. False: stale (handled). None: cannot tell right now."""
         if not force and now() - float(rec.get("last_heartbeat") or 0) < self.heartbeat_interval:
@@ -471,6 +525,7 @@ class Worker:
         except (Conflict, NotFound) as e:
             self.state.update_attempt(att_id, status=L_DONE, outcome=f"{kind}: {e.code}: {e.detail}")
             local_event(self.cfg.state_dir, "report_conflict", e.detail, job=rec.get("name"), attempt=att_id)
+            self._release_shared_checkout(rec)
             return
         except InvalidRequest as e:
             # The control plane will never accept this payload; resending it forever would
@@ -478,6 +533,7 @@ class Worker:
             local_event(self.cfg.state_dir, "report_rejected", e.detail, job=rec.get("name"), attempt=att_id)
             if kind == "fail" and p.get("reason") == "report_rejected":
                 self.state.update_attempt(att_id, status=L_DONE, outcome=f"report rejected: {e.detail}")
+                self._release_shared_checkout(rec)
                 return
             with self.state.locked() as st:
                 st["attempts"][att_id]["report"] = {
@@ -492,6 +548,19 @@ class Worker:
         self.state.update_attempt(att_id, status=L_DONE, outcome=kind, reported_at=now())
         local_event(self.cfg.state_dir, f"reported_{kind}", p.get("reason", "") if kind != "complete" else "",
                     job=rec.get("name"), attempt=att_id)
+        # Shared checkouts are exclusive. Once the control plane has our terminal report,
+        # stop the session so the next attempt can use the directory (and so a still-running
+        # agent cannot keep writing into it).
+        self._release_shared_checkout(rec)
+
+    def _release_shared_checkout(self, rec: dict[str, Any]) -> None:
+        if rec.get("mode") != repo_mod.MODE_SHARED:
+            return
+        handle = rec.get("handle")
+        if not handle:
+            return
+        self.launcher.stop(handle)
+        local_event(self.cfg.state_dir, "shared_session_stopped", handle, job=rec.get("name"), attempt=rec["attempt_id"])
 
     def _stale(self, rec: dict[str, Any], reason: str, update: bool = True) -> None:
         """The control plane says we are not the owner. Stop acting; do not destroy work."""

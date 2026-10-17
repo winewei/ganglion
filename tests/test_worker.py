@@ -429,7 +429,83 @@ class TestIsolation(WorkerEnv):
         wait_for(lambda: (self.app / "DELIVERY.md").exists())
         a.tick()
         self.assertEqual(self.full(j1["id"])["status"], "completed")
+        # Shared sessions are stopped after a terminal report so the next attempt can enter.
+        self.assertFalse(self.alive(a, self.rec(a, "s1")["handle"]))
         self.assertEqual(self.full(j2["id"])["status"], "running")
+
+    def test_done_session_keeps_shared_checkout_busy_until_stopped(self):
+        """If a completed attempt's process is still alive, do not start another in the same checkout."""
+        self.set_mode("s1", "ondemand")
+        a = self.worker("A", isolation="shared")
+        # Disable auto-stop so we can assert the busy-repo gate on its own.
+        a._release_shared_checkout = lambda rec: None  # type: ignore[method-assign]
+        j1 = self.job("s1", repository={"name": "app"})
+        j2 = self.job("s2", repository={"name": "app"})
+        a.tick()
+        self.go("s1", self.rec(a, "s1")["attempt_id"])
+        wait_for(lambda: (self.app / "DELIVERY.md").exists())
+        a.tick()
+        self.assertEqual(self.full(j1["id"])["status"], "completed")
+        self.assertEqual(self.rec(a, "s1")["status"], "done")
+        self.assertTrue(self.alive(a, self.rec(a, "s1")["handle"]))
+        self.assertEqual(self.full(j2["id"])["status"], "queued")
+        self.assertIn("app", a.busy_shared_repos())
+        subprocess.run(["tmux", "-L", a.cfg.claude.tmux_socket, "kill-session",
+                        "-t", f"={self.rec(a, 's1')['handle']}"], check=True)
+        a.tick()
+        self.assertEqual(self.full(j2["id"])["status"], "running")
+
+    def test_prepare_cmderror_is_retryable(self):
+        """CmdError subclasses RuntimeError; it must still be classified as retryable."""
+        a = self.worker("A")
+        j = self.job("boom", repository={"name": "app"})
+        from ganglion.common import CmdError
+        from ganglion.worker import repo as repo_mod
+
+        def boom(*_a, **_k):
+            raise CmdError("git lock raced")
+
+        orig = repo_mod.deliver_requirement
+        repo_mod.deliver_requirement = boom  # type: ignore[assignment]
+        try:
+            a.tick()
+        finally:
+            repo_mod.deliver_requirement = orig  # type: ignore[assignment]
+        full = self.full(j["id"])
+        self.assertEqual(full["status"], "queued")  # retryable fail requeues
+        self.assertEqual(full["failures"], 1)
+        self.assertIn("prepare_failed", full["attempts"][0]["error"])
+
+    def test_lease_renewed_during_slow_prepare(self):
+        """A prepare longer than lease_ttl must keep heartbeating or the attempt expires."""
+        self.service.settings.lease_ttl = 2.0
+        a = self.worker("A", heartbeat_interval=0.3)
+        j = self.job("slowprep", repository={"name": "app"})
+        from ganglion.worker import repo as repo_mod
+
+        calls = {"n": 0}
+        real_hb = a.client.heartbeat
+
+        def counting_hb(*args, **kwargs):
+            calls["n"] += 1
+            return real_hb(*args, **kwargs)
+
+        a.client.heartbeat = counting_hb  # type: ignore[method-assign]
+        orig = repo_mod.prepare_workspace
+
+        def slow_prepare(*args, **kwargs):
+            time.sleep(2.6)  # > lease_ttl; background renewals must keep ownership
+            return orig(*args, **kwargs)
+
+        repo_mod.prepare_workspace = slow_prepare  # type: ignore[assignment]
+        try:
+            a.tick()
+        finally:
+            repo_mod.prepare_workspace = orig  # type: ignore[assignment]
+        full = self.full(j["id"])
+        self.assertEqual(full["status"], "running", full.get("error"))
+        self.assertEqual(full["epoch"], 1)
+        self.assertGreaterEqual(calls["n"], 3)  # initial + background renewals + pre-launch
 
     def test_stale_session_keeps_shared_checkout_busy(self):
         self.set_mode("s1", "ondemand")
